@@ -82,6 +82,15 @@ func (b *base) do(ctx context.Context, method, path string, body, out any) error
 	}
 	defer resp.Body.Close()
 	data, _ := io.ReadAll(resp.Body)
+	// 501 is how a fake server says "this game can't", mirroring the shape
+	// real clients have: Dragonwilds returns *game.UnsupportedError for a
+	// command with no channel to reach the game through. Without this a
+	// shared-layer test could only ever produce a generic fault, and the
+	// capability/fault split — which callers branch on — would be untestable
+	// from here.
+	if resp.StatusCode == http.StatusNotImplemented {
+		return &game.UnsupportedError{Op: strings.TrimPrefix(path, "/v1/api/"), Reason: strings.TrimSpace(string(data))}
+	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return fmt.Errorf("game api %s: %s: %s", path, resp.Status, strings.TrimSpace(string(data)))
 	}

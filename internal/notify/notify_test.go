@@ -155,12 +155,39 @@ func TestEventsReachDiscord(t *testing.T) {
 		t.Errorf("RestartWarning should say 'minute' for one: %q", spy.description())
 	}
 
-	n.RestartingNow(ctx, srv)
+	n.RestartingNow(ctx, srv, notify.SaveDone)
 	n.WatchdogRestarted(ctx, srv, 137, 2)
 	n.WatchdogGaveUp(ctx, srv, 3)
 	n.BackupFailed(ctx, srv, errors.New("disk full"))
 	if !strings.Contains(spy.description(), "disk full") {
 		t.Errorf("BackupFailed should carry the cause: %q", spy.description())
+	}
+}
+
+// The restart notice must never claim a save that didn't happen. On a game
+// that doesn't save on shutdown, whether the world reached disk is the one
+// fact a player needs to judge what they just lost.
+func TestRestartNoticeSaysWhetherTheWorldWasSaved(t *testing.T) {
+	n, srv, spy := fixture(t, nil)
+	ctx := context.Background()
+
+	n.RestartingNow(ctx, srv, notify.SaveDone)
+	if !strings.Contains(spy.description(), "saved its world") {
+		t.Errorf("a save that happened should be stated: %q", spy.description())
+	}
+
+	n.RestartingNow(ctx, srv, notify.SaveUnsupported)
+	got := spy.description()
+	if strings.Contains(got, "saved its world") {
+		t.Errorf("claimed a save with no bridge to make one: %q", got)
+	}
+	if !strings.Contains(got, "lost") {
+		t.Errorf("should say what the missing save costs: %q", got)
+	}
+
+	n.RestartingNow(ctx, srv, notify.SaveFailed)
+	if got := spy.description(); strings.Contains(got, "saved its world") {
+		t.Errorf("claimed a save that failed: %q", got)
 	}
 }
 
@@ -204,7 +231,7 @@ func TestPerEventTogglesGateDelivery(t *testing.T) {
 	t.Run("restarts off", func(t *testing.T) {
 		n, srv, spy := fixture(t, func(w *store.DiscordWebhook) { w.OnRestarts = false })
 		n.RestartWarning(ctx, srv, 5)
-		n.RestartingNow(ctx, srv)
+		n.RestartingNow(ctx, srv, notify.SaveDone)
 		if spy.count() != 0 {
 			t.Errorf("restart events should be muted: %d posts", spy.count())
 		}

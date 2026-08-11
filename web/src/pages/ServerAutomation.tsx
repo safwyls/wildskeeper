@@ -296,7 +296,9 @@ function SchedulesCard({
           <p className="text-sm text-wk-parchment/60">No restart schedules yet.</p>
           {canEdit && (
             <p className="mt-1 text-sm text-wk-parchment/60">
-              Add one and Wildskeeper restarts the server on schedule. The game has no save command and does not save on shutdown, so a restart loses anything since the last autosave.
+              Add one and Wildskeeper restarts the server on schedule, saving the world first when the dwbridge mod
+              is running. Without the mod there is no way to save on demand, and a restart loses anything since the
+              game's last autosave.
             </p>
           )}
         </div>
@@ -354,7 +356,9 @@ function SchedulesCard({
 
       <div className="space-y-1 border-t border-wk-edge px-5 py-3 text-xs text-wk-parchment/50">
         <p>
-          Times are {data.timezone} (Wildskeeper's clock). The world is not saved before a restart — the game only autosaves on its own timer.
+          Times are {data.timezone} (Wildskeeper's clock). Wildskeeper saves the world before each restart, which
+          needs the dwbridge mod — without it the game only autosaves on its own timer, so a restart costs whatever
+          came after the last one. Every run records which of the two happened in Activity.
         </p>
         {!data.dockerRestart && (
           <p className="text-wk-parchment/60">
@@ -420,7 +424,8 @@ function ScheduleDialog({
         <DialogHeader>
           <DialogTitle>{schedule ? "Edit schedule" : "Add restart schedule"}</DialogTitle>
           <DialogDescription>
-            Each lead time is when a warning would be sent once a command bridge exists. The server then restarts; the game does not save on shutdown.
+            Each lead time sends a Discord warning; an in-game warning needs a dwbridge mod that can broadcast, and
+            none does yet. At the scheduled time Wildskeeper saves the world, then restarts the server.
           </DialogDescription>
         </DialogHeader>
 

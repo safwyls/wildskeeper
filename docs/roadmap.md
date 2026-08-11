@@ -70,10 +70,22 @@ Everything here was motivated by a real friction on 2026-08-10:
     untars by hand". A deliberate restore verb on the agent (the one thing
     the read-only save mount was waiting for), gated in the UI behind a
     stopped server and a confirmation naming the save it overwrites.
-13. **Scheduled-restart polish for the no-save-on-shutdown game.** The
-    scheduler exists; wire it to dwbridge `save` so a restart is
-    warn → save → stop → start, closing the up-to-5-minutes-lost window
-    when the bridge is present.
+13. ~~**Scheduled-restart polish for the no-save-on-shutdown game.**~~
+    **Done (2026-08-11), and it was smaller than it looked.** The
+    scheduler already called `client.Save` before restarting, so the
+    warn → save → stop → start chain has been reaching dwbridge since the
+    mod landed — what was missing was any way to know whether the save
+    happened. The three outcomes (saved / no command bridge / failed) are
+    now distinguished by `errors.As` on `*game.UnsupportedError`, and each
+    one reaches the Discord restart notice, the audit trail (visible in
+    Activity) and the log. Nothing claims a save it didn't make.
+    What's left here is forward-looking rather than after-the-fact: the
+    Automation page says "saved first when the dwbridge mod is running"
+    because it has no way to ask whether *this* server has one. A
+    capability probe — an optional `Supports(ctx, op)` on the client,
+    answered from the agent's `health.bridge` command list — would let
+    that page, and the Save world buttons, state the truth for the server
+    in front of you instead of hedging.
 14. **Update automation.** SteamCMD update through the agent exists as a
     verb; add update checking (build id polling), a "update available"
     badge, and an opt-in maintenance window that chains save → stop →

@@ -34,11 +34,15 @@ type gameSpy struct {
 	// bodies keeps the last decoded payload per path, so a test can assert
 	// what was actually asked for and not just that something was.
 	bodies map[string]map[string]any
+	// statuses overrides the response code for a path, so a test can make a
+	// single step fail — 501 for "this game can't", anything else for a
+	// fault — while the rest of the sequence behaves.
+	statuses map[string]int
 }
 
 func newGameSpy(t *testing.T) (*gameSpy, string) {
 	t.Helper()
-	spy := &gameSpy{bodies: map[string]map[string]any{}}
+	spy := &gameSpy{bodies: map[string]map[string]any{}, statuses: map[string]int{}}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		spy.mu.Lock()
 		spy.calls = append(spy.calls, r.URL.Path)
@@ -48,7 +52,12 @@ func newGameSpy(t *testing.T) (*gameSpy, string) {
 				spy.bodies[r.URL.Path] = body
 			}
 		}
+		status := spy.statuses[r.URL.Path]
 		spy.mu.Unlock()
+		if status != 0 {
+			http.Error(w, "the fake game refused "+r.URL.Path, status)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/v1/api/info":
@@ -67,6 +76,13 @@ func (g *gameSpy) saw(path string) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return strings.Contains(strings.Join(g.calls, " "), path)
+}
+
+// answer makes path respond with the given status instead of succeeding.
+func (g *gameSpy) answer(path string, status int) {
+	g.mu.Lock()
+	g.statuses[path] = status
+	g.mu.Unlock()
 }
 
 func (g *gameSpy) count() int {

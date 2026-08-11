@@ -167,6 +167,19 @@ The pieces, all committed:
   confirmations — the interactive half of roadmap item 13's
   warn → save → stop → start chain. Capability is still discovered by
   doing: no bridge means the button's toast relays the 501's reason.
+- **the scheduler** — the *automatic* half of that chain, and the surprise
+  when it was picked up (2026-08-11): `sched.restart` had called
+  `client.Save` all along, so scheduled restarts have been reaching
+  dwbridge since the mod landed. What was missing was knowing whether the
+  save happened. It now classifies the attempt — saved / no command bridge
+  (`*game.UnsupportedError`) / failed — and carries that into the Discord
+  restart notice, the audit detail (`"05:00 · world saved"`, rendered in
+  Activity) and the log. The notice used to be sent *before* the save and
+  claim "is saving and restarting now" unconditionally; it is now sent
+  after, and says which of the three happened. On a game that does not save
+  on shutdown, that distinction is the difference between a clean restart
+  and losing up to ~5 minutes, so it is worth the ≤25 s the save budget
+  adds to the notice.
 
 What's left in Phase 4, in the order worth attempting:
 

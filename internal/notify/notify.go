@@ -129,10 +129,60 @@ func (n *Notifier) RestartWarning(ctx context.Context, srv *store.Server, minute
 	})
 }
 
-func (n *Notifier) RestartingNow(ctx context.Context, srv *store.Server) {
+// SaveOutcome is what the save before a restart achieved. Dragonwilds does
+// not save on shutdown, so this is the difference between a clean restart
+// and losing everything since the last autosave — which makes it worth
+// saying out loud rather than burying in a log line. It lives here because
+// rendering events into words is this package's job; the scheduler only
+// reports which one happened.
+type SaveOutcome int
+
+const (
+	// SaveDone: the world was written before the restart.
+	SaveDone SaveOutcome = iota
+	// SaveUnsupported: this server has no command channel to save through
+	// (no dwbridge mod). A capability gap, not a fault — and a standing one,
+	// so the restart will cost play time every time until it's closed.
+	SaveUnsupported
+	// SaveFailed: a save was possible and went wrong. Usually transient.
+	SaveFailed
+	// SaveSkipped: no game client at all, so nothing was attempted.
+	SaveSkipped
+)
+
+// String is the phrase used in logs and the audit trail. The Discord
+// wording is separate — that one is written for players, this one for
+// whoever is reading back what happened.
+func (o SaveOutcome) String() string {
+	switch o {
+	case SaveDone:
+		return "world saved"
+	case SaveUnsupported:
+		return "world not saved (no command bridge)"
+	case SaveFailed:
+		return "world save failed"
+	default:
+		return "world save not attempted"
+	}
+}
+
+// RestartingNow announces the restart, and says whether the world made it to
+// disk first. Claiming a save that didn't happen would be worse than saying
+// nothing: it's exactly the fact a player needs to know to judge what they
+// lost.
+func (n *Notifier) RestartingNow(ctx context.Context, srv *store.Server, save SaveOutcome) {
+	desc := fmt.Sprintf("**%s** saved its world and is restarting now.", srv.Name)
+	switch save {
+	case SaveUnsupported:
+		desc = fmt.Sprintf("**%s** is restarting now. Its world could not be saved first — no command bridge is running — so anything since the last autosave is lost.", srv.Name)
+	case SaveFailed:
+		desc = fmt.Sprintf("**%s** is restarting now. The save before the restart failed, so anything since the last autosave may be lost.", srv.Name)
+	case SaveSkipped:
+		desc = fmt.Sprintf("**%s** is restarting now.", srv.Name)
+	}
 	n.send(ctx, srv, EventRestarts, embed{
 		Title:       "🔄 Scheduled restart",
-		Description: fmt.Sprintf("**%s** is saving and restarting now.", srv.Name),
+		Description: desc,
 		Color:       colorAmber,
 	})
 }

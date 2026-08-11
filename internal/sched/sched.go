@@ -12,12 +12,14 @@ package sched
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
 
 	"github.com/safwyls/wildskeeper/internal/agentctl"
 	"github.com/safwyls/wildskeeper/internal/dockerctl"
+	"github.com/safwyls/wildskeeper/internal/game"
 	"github.com/safwyls/wildskeeper/internal/notify"
 	"github.com/safwyls/wildskeeper/internal/store"
 )
@@ -210,6 +212,35 @@ func (s *Scheduler) warn(ctx context.Context, srv *store.Server, minutes int) {
 	}
 }
 
+// saveBeforeRestart writes the world before the process goes down, and
+// classifies what happened. The restart proceeds either way — a server too
+// wedged to save is the one most in need of restarting — but the three
+// outcomes mean very different things to an operator, so they must not
+// collapse into one "failed" line.
+//
+// For Dragonwilds this is the whole point of the sequence: the game does
+// not save on shutdown and autosaves only every ~5 minutes, so the save is
+// the only thing standing between a scheduled restart and lost play. It
+// reaches the game through the dwbridge mod; without one, Save answers
+// *game.UnsupportedError, which is a standing capability gap rather than a
+// blip and is worth naming as such every time it costs someone their
+// progress.
+func (s *Scheduler) saveBeforeRestart(ctx context.Context, srv *store.Server, client game.Client) notify.SaveOutcome {
+	err := client.Save(ctx)
+	if err == nil {
+		s.logger.Info("scheduler: world saved before restart", "server", srv.ID)
+		return notify.SaveDone
+	}
+	var unsupported *game.UnsupportedError
+	if errors.As(err, &unsupported) {
+		s.logger.Warn("scheduler: no way to save this server before restarting; anything since the last autosave will be lost",
+			"server", srv.ID, "reason", unsupported.Reason)
+		return notify.SaveUnsupported
+	}
+	s.logger.Warn("scheduler: save before restart failed; restarting anyway", "server", srv.ID, "error", err)
+	return notify.SaveFailed
+}
+
 // restart mirrors the manual power flow (save → in-game shutdown → agent
 // or container restart), with each step best-effort: a hung server that
 // can't save is exactly the server most in need of the restart that
@@ -226,22 +257,26 @@ func (s *Scheduler) restart(ctx context.Context, srv *store.Server, sc *store.Re
 	defer cancel()
 
 	s.notifier.SuppressStatus(srv.ID, suppressFor)
-	s.notifier.RestartingNow(ctx, srv)
 	s.logger.Info("scheduler: restarting server", "server", srv.ID, "name", srv.Name, "schedule", sc.ID)
 
 	// A client failure here is a row naming an unknown game, not an
 	// unreachable server: skip the in-game steps and let the container
 	// restart below still happen.
 	client, clientErr := srv.Client()
+	saveOutcome := notify.SaveSkipped
 	if clientErr != nil {
 		s.logger.Warn("scheduler: no game client; restarting container only", "server", srv.ID, "error", clientErr)
 	} else {
 		stepCtx, stepCancel := context.WithTimeout(ctx, 25*time.Second)
-		if err := client.Save(stepCtx); err != nil {
-			s.logger.Warn("scheduler: save before restart failed; restarting anyway", "server", srv.ID, "error", err)
-		}
+		saveOutcome = s.saveBeforeRestart(stepCtx, srv, client)
 		stepCancel()
 	}
+
+	// Announced after the save rather than before it, so the notice can
+	// report what actually happened. The cost is up to the save's own 25s
+	// budget of delay on a message players already had lead-time warnings
+	// for; the benefit is that it never claims a save that didn't happen.
+	s.notifier.RestartingNow(ctx, srv, saveOutcome)
 
 	// A supervisor-mode agent owns the game process, so it does the
 	// restarting — checked before docker for the same reason the manual
@@ -297,11 +332,14 @@ func (s *Scheduler) restart(ctx context.Context, srv *store.Server, sc *store.Re
 		s.logger.Error("scheduler: recording run", "schedule", sc.ID, "error", err)
 	}
 	// Scheduled restarts join the same audit trail as manual power actions,
-	// so the "who restarted the server at 5am" question has one answer page.
-	if err := s.store.InsertAudit(ctx, srv.ID, "scheduler", "scheduled-restart", sc.TimeOfDay); err != nil {
+	// so the "who restarted the server at 5am" question has one answer page —
+	// and, since the answer to "did we lose anything?" is only knowable at
+	// the moment of the restart, the save outcome is recorded with it.
+	detail := fmt.Sprintf("%s · %s", sc.TimeOfDay, saveOutcome)
+	if err := s.store.InsertAudit(ctx, srv.ID, "scheduler", "scheduled-restart", detail); err != nil {
 		s.logger.Error("scheduler: recording audit entry", "schedule", sc.ID, "error", err)
 	}
-	s.logger.Info("scheduler: restart complete", "server", srv.ID, "schedule", sc.ID, "docker", useDocker)
+	s.logger.Info("scheduler: restart complete", "server", srv.ID, "schedule", sc.ID, "docker", useDocker, "save", saveOutcome.String())
 }
 
 func parseTimeOfDay(s string) (hour, minute int, ok bool) {
