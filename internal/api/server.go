@@ -135,6 +135,9 @@ func (s *Server) Routes(staticFS fs.FS) http.Handler {
 
 				r.Get("/info", s.handleServerInfo)
 				r.Get("/players", s.handleServerPlayers)
+				// What this server's commands can actually do, asked
+				// before offering them rather than discovered by a 501.
+				r.Get("/capabilities", s.handleServerCapabilities)
 				r.With(s.requirePermission(store.PermBroadcast)).Post("/broadcast", s.handleServerBroadcast)
 				r.With(s.requirePermission(store.PermModerate)).Post("/kick", s.handleServerKick)
 				r.With(s.requirePermission(store.PermModerate)).Post("/ban", s.handleServerBan)

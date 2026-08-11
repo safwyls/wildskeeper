@@ -267,6 +267,29 @@ export interface DiscoveredServer {
   registered: boolean;
 }
 
+/** One command's answer from the capabilities probe. */
+export interface CommandCapability {
+  supported: boolean;
+  /** Why not, when unsupported — the same text the 501 would carry. Shown
+   * verbatim, so it should name what's missing. */
+  reason?: string;
+}
+
+/**
+ * What a server's commands can actually do right now.
+ *
+ * For Dragonwilds the answer moves with the dwbridge mod, which is a
+ * property of the machine rather than the game — so it has to be asked, not
+ * assumed. `probed` is false for a game whose client can't answer; every
+ * command then reports supported, which is what the UI assumed before this
+ * existed. Treat a failed request the same way: show the control and let a
+ * 501 explain itself, rather than hiding a working button.
+ */
+export interface Capabilities {
+  probed: boolean;
+  commands: Record<string, CommandCapability | undefined>;
+}
+
 export interface ServerInfo {
   servername: string;
   version: string;
@@ -920,6 +943,9 @@ export const api = {
 
   serverInfo: (id: number) => request<ServerInfo>(`/servers/${id}/info`),
   serverPlayers: (id: number) => request<Player[]>(`/servers/${id}/players`),
+  // What this server's commands can actually do, so the UI can say so
+  // before anyone clicks. See Capabilities.
+  serverCapabilities: (id: number) => request<Capabilities>(`/servers/${id}/capabilities`),
   broadcast: (id: number, message: string) =>
     request<void>(`/servers/${id}/broadcast`, { method: "POST", body: JSON.stringify({ message }) }),
   kick: (id: number, playerUid: string, message: string) =>

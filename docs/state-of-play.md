@@ -160,6 +160,12 @@ The pieces, all committed:
 - **dragonwilds client** — commands route through the bridge when the
   heartbeat lists them; otherwise the honest 501 stands. `save` is live;
   the rest map to real functions but await the mod implementing them.
+  It also answers `game.CommandProber` (2026-08-11): `Supports(ctx, op)`
+  reports whether a command would be carried *without* carrying it, so the
+  console can describe a server before anyone clicks. Probe and command
+  share one decision (`bridgeReady`), which is what keeps a promise from
+  drifting from the behaviour; `GET /servers/{id}/capabilities` exposes it,
+  and a game whose client has no prober reports everything supported.
 - **the dashboard** — on-demand save is a first-class control (2026-08-11):
   a Save world button in the Overview's power row (kept even for
   agent-managed servers, where docker power hides) and on the World-saves

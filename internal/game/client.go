@@ -111,6 +111,28 @@ type ExtendedClient interface {
 	Metrics(ctx context.Context) (*Metrics, error)
 }
 
+// CommandProber is implemented by clients that can say, without performing
+// it, whether a command would be served right now. It exists so the UI can
+// state the truth up front — "this server saves before a restart" — instead
+// of hedging or discovering the answer by firing the command and reading the
+// 501 that comes back.
+//
+// Only a client whose support genuinely varies per server needs this.
+// Dragonwilds does: an on-demand save exists only when the dwbridge mod is
+// running, which is a property of the machine, not of the game. A client
+// with a fixed command set simply doesn't implement the interface, and
+// callers fall back to assuming a command is available — the same optimism
+// they had before probing existed.
+//
+// Supports reports whether op (the lowercase Client method name) can be
+// served, and when it can't, the same reason an *UnsupportedError would
+// carry. It must have no side effects and must agree with what actually
+// running op would do, so implementations should share one decision between
+// the two rather than restating it.
+type CommandProber interface {
+	Supports(ctx context.Context, op string) (bool, string)
+}
+
 // Conn carries connection details for one server. Passwords are expected to
 // already be decrypted by the caller.
 type Conn struct {

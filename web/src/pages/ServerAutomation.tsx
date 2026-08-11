@@ -25,6 +25,7 @@ import {
   type ScheduleWriteInput,
 } from "../lib/api";
 import { useAuth } from "../lib/auth";
+import { useCommand } from "../lib/capabilities";
 import { agoLabel } from "../lib/time";
 import { cn } from "../lib/utils";
 import { Button } from "../components/ui/button";
@@ -252,6 +253,10 @@ function SchedulesCard({
 }) {
   const queryClient = useQueryClient();
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ["automation", serverId] });
+  // A scheduled restart saves first — but only where something can carry
+  // the save. Asking lets this card describe what will happen to *this*
+  // server instead of listing both possibilities.
+  const saveCmd = useCommand(serverId, "save");
 
   const toggle = useMutation({
     mutationFn: (sc: RestartSchedule) =>
@@ -296,9 +301,10 @@ function SchedulesCard({
           <p className="text-sm text-wk-parchment/60">No restart schedules yet.</p>
           {canEdit && (
             <p className="mt-1 text-sm text-wk-parchment/60">
-              Add one and Wildskeeper restarts the server on schedule, saving the world first when the dwbridge mod
-              is running. Without the mod there is no way to save on demand, and a restart loses anything since the
-              game's last autosave.
+              Add one and Wildskeeper restarts the server on schedule.{" "}
+              {saveCmd.known && !saveCmd.supported
+                ? "This server has no way to save on demand, so a restart loses anything since the game's last autosave."
+                : "The world is saved first, so a restart costs nothing."}
             </p>
           )}
         </div>
@@ -356,9 +362,17 @@ function SchedulesCard({
 
       <div className="space-y-1 border-t border-wk-edge px-5 py-3 text-xs text-wk-parchment/50">
         <p>
-          Times are {data.timezone} (Wildskeeper's clock). Wildskeeper saves the world before each restart, which
-          needs the dwbridge mod — without it the game only autosaves on its own timer, so a restart costs whatever
-          came after the last one. Every run records which of the two happened in Activity.
+          Times are {data.timezone} (Wildskeeper's clock).{" "}
+          {saveCmd.known && !saveCmd.supported ? (
+            <>
+              This server cannot be saved on demand — {saveCmd.reason} — so each restart costs whatever came after the
+              game's last autosave. Every run records that in Activity.
+            </>
+          ) : (
+            <>
+              Wildskeeper saves the world before each restart, and records in Activity whether the save landed.
+            </>
+          )}
         </p>
         {!data.dockerRestart && (
           <p className="text-wk-parchment/60">

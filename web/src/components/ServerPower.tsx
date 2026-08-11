@@ -4,6 +4,7 @@ import { Eraser, HardDriveDownload, Play, RotateCw, Save, ScrollText, Square } f
 import { toast } from "sonner";
 import { api, ApiError, errorDetail } from "../lib/api";
 import { useAuth } from "../lib/auth";
+import { useCommand } from "../lib/capabilities";
 import { cn } from "../lib/utils";
 import { Button } from "./ui/button";
 import { ContainerLogsDialog } from "./ContainerLogsDialog";
@@ -100,6 +101,10 @@ export function ServerPower({
 
   const allowed = can("power");
   const canSave = can("save");
+  // Whether this server can save at all, asked rather than assumed. Only
+  // worth asking for someone who could use the answer.
+  const saveCmd = useCommand(serverId, "save", canSave);
+  const saveBlocked = saveCmd.known && !saveCmd.supported;
 
   // Polls only while the agent reports a running job; also runs once on
   // mount, so a reload (or a wildskeeper restart) rediscovers an in-flight
@@ -244,18 +249,22 @@ export function ServerPower({
             )}
             {/* A world action, not a process action, so it sits ahead of the
                 power group — and unlike them it stays for agent-managed
-                servers, where the bridge is the only lever. Docker knowing the
-                container is down is the one case worth disabling for; in
-                agent-managed mode the honest 501/502 speaks instead. */}
+                servers, where the bridge is the only lever. Disabled for the
+                two cases we can know about without asking the game: docker
+                reporting the container down, and the capability probe saying
+                this server has no way to save. Anything else stays clickable
+                and explains itself in the toast. */}
             {canSave && (
               <Button
                 variant="secondary"
                 size="sm"
-                disabled={save.isPending || (!powerOff && powerAvailable && !running)}
+                disabled={save.isPending || (!powerOff && powerAvailable && !running) || saveBlocked}
                 title={
-                  !powerOff && powerAvailable && !running
-                    ? "The server is not running"
-                    : "Ask the game to write the world to disk now"
+                  saveBlocked
+                    ? saveCmd.reason
+                    : !powerOff && powerAvailable && !running
+                      ? "The server is not running"
+                      : "Ask the game to write the world to disk now"
                 }
                 onClick={() => save.mutate()}
               >
@@ -429,7 +438,7 @@ export function ServerPower({
                     desktop row, topmost in the phone's reversed stack. The
                     warning's own answer should not sit below the action it
                     warns about. */}
-                {confirming !== "start" && canSave && (
+                {confirming !== "start" && canSave && !saveBlocked && (
                   <Button
                     variant="secondary"
                     disabled={act.isPending || save.isPending}

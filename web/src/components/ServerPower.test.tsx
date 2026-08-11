@@ -95,6 +95,39 @@ describe("ServerPower on-demand save", () => {
     expect(screen.getByRole("button", { name: "Save world, then stop" })).toBeInTheDocument();
   });
 
+  it("disables Save world, with the reason, when the server has no way to save", async () => {
+    const reason = "an on-demand save needs the dwbridge mod";
+    vi.spyOn(api, "serverCapabilities").mockResolvedValue({
+      probed: true,
+      commands: { save: { supported: false, reason } },
+    });
+    const save = vi.spyOn(api, "save").mockResolvedValue(undefined);
+    renderPower();
+
+    const button = await screen.findByRole("button", { name: "Save world" });
+    await waitFor(() => expect(button).toBeDisabled());
+    expect(button).toHaveAttribute("title", reason);
+
+    // And the stop dialog stops offering a save-first path that could only
+    // ever fail.
+    await userEvent.click(screen.getByRole("button", { name: "Stop" }));
+    await screen.findByText(/Stop the server\?/i);
+    expect(screen.queryByRole("button", { name: /Save world, then/ })).not.toBeInTheDocument();
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it("stays optimistic while the capability answer is unknown", async () => {
+    // A game that can't be probed, which is what every game was before the
+    // probe existed. Hiding the control would be the wrong call: the command
+    // explains itself if it turns out to be unavailable.
+    vi.spyOn(api, "serverCapabilities").mockResolvedValue({ probed: false, commands: {} });
+    const save = vi.spyOn(api, "save").mockResolvedValue(undefined);
+    renderPower();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Save world" }));
+    await waitFor(() => expect(save).toHaveBeenCalledWith(1));
+  });
+
   it("keeps the save control for agent-managed servers whose docker power is off", async () => {
     vi.spyOn(api, "containerStatus").mockRejectedValue(
       new ApiError(400, "docker power control not configured"),

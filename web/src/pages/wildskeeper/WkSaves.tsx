@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { api, errorDetail, type WorldInfo } from "../../lib/api";
 import { useAuth } from "../../lib/auth";
+import { useCommand } from "../../lib/capabilities";
 import { agoLabel } from "../../lib/time";
 import { WkNote, WkPanel } from "../../components/wildskeeper/WkPanel";
 
@@ -65,6 +66,11 @@ export function WkSaves() {
   const id = Number(serverID);
   const { isAdmin, can } = useAuth();
   const queryClient = useQueryClient();
+  // Asked, not assumed: an on-demand save exists only where the dwbridge
+  // mod is running. When it isn't, its reason replaces the note that would
+  // otherwise promise something this server can't do.
+  const saveCmd = useCommand(id, "save", can("save"));
+  const saveBlocked = saveCmd.known && !saveCmd.supported;
 
   const backupsQuery = useQuery({
     queryKey: ["backups", id],
@@ -169,7 +175,7 @@ export function WkSaves() {
                 {can("save") && (
                   <button
                     onClick={() => saveWorld.mutate()}
-                    disabled={saveWorld.isPending}
+                    disabled={saveWorld.isPending || saveBlocked}
                     title="Ask the game to write the world to disk now — snapshots read that file"
                     className="rounded border border-wk-edge px-4 py-1.5 text-wk-mist transition hover:border-wk-brass hover:text-wk-brasshi disabled:opacity-50"
                   >
@@ -177,8 +183,9 @@ export function WkSaves() {
                   </button>
                 )}
                 <span className="text-xs text-wk-mist">
-                  The game autosaves every ~5 minutes — Save world writes the live world first, so a snapshot is up to
-                  the second.
+                  {saveBlocked
+                    ? saveCmd.reason
+                    : "The game autosaves every ~5 minutes — Save world writes the live world first, so a snapshot is up to the second."}
                 </span>
               </div>
               {backups.snapshots.length === 0 ? (

@@ -79,13 +79,15 @@ Everything here was motivated by a real friction on 2026-08-10:
     now distinguished by `errors.As` on `*game.UnsupportedError`, and each
     one reaches the Discord restart notice, the audit trail (visible in
     Activity) and the log. Nothing claims a save it didn't make.
-    What's left here is forward-looking rather than after-the-fact: the
-    Automation page says "saved first when the dwbridge mod is running"
-    because it has no way to ask whether *this* server has one. A
-    capability probe — an optional `Supports(ctx, op)` on the client,
-    answered from the agent's `health.bridge` command list — would let
-    that page, and the Save world buttons, state the truth for the server
-    in front of you instead of hedging.
+    The forward-looking half is done too: `game.CommandProber`
+    (`Supports(ctx, op)`) is served by the dragonwilds client from the
+    agent's `health.bridge` command list and exposed at
+    `GET /servers/{id}/capabilities`, so the Automation page, the power
+    row and the World-saves page describe *this* server rather than
+    listing both possibilities. The probe and the command share one
+    decision (`bridgeReady`) so they cannot drift, and a game with no
+    prober reports everything supported — the optimism every caller had
+    before it existed.
 14. **Update automation.** SteamCMD update through the agent exists as a
     verb; add update checking (build id polling), a "update available"
     badge, and an opt-in maintenance window that chains save → stop →

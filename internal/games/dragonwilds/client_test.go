@@ -362,3 +362,91 @@ func TestShutdownStaysUnsupported(t *testing.T) {
 		t.Errorf("Shutdown: err = %v, want UnsupportedError (agent power controls own this)", err)
 	}
 }
+
+// prober asserts the client through the published optional interface, so
+// these tests also prove it actually satisfies game.CommandProber — the
+// thing the API handler type-asserts for.
+func prober(t *testing.T, c game.Client) game.CommandProber {
+	t.Helper()
+	p, ok := c.(game.CommandProber)
+	if !ok {
+		t.Fatal("the dragonwilds client no longer implements game.CommandProber")
+	}
+	return p
+}
+
+// The probe's whole value is that it agrees with reality, so this asserts
+// the agreement directly rather than the two answers separately: for every
+// bridge shape, what Supports promises is what Save actually does. A probe
+// that drifts from the command is worse than no probe — it would put a
+// working-looking button in front of a server that can't serve it, or hide
+// one that could.
+func TestSupportsAgreesWithTheCommandItPredicts(t *testing.T) {
+	cases := []struct {
+		name      string
+		bridge    []string // nil = no bridge at all
+		available bool
+		want      bool
+	}{
+		{name: "no bridge", bridge: nil, want: false},
+		{name: "bridge down", bridge: []string{"ping", "save"}, available: false, want: false},
+		{name: "bridge without save", bridge: []string{"ping"}, available: true, want: false},
+		{name: "bridge with save", bridge: []string{"ping", "save"}, available: true, want: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			agent, url := newFakeAgent(t)
+			agent.set("running")
+			if tc.bridge != nil {
+				agent.setBridge(tc.available, tc.bridge...)
+			}
+			c := newClient(t, url)
+
+			got, reason := prober(t, c).Supports(context.Background(), "save")
+			if got != tc.want {
+				t.Errorf("Supports(save) = %v, want %v (reason %q)", got, tc.want, reason)
+			}
+			// The command's own verdict, by the only distinction that
+			// matters to a caller: did it refuse as a capability gap?
+			err := c.Save(context.Background())
+			var unsupported *game.UnsupportedError
+			servable := !errors.As(err, &unsupported)
+			if servable != tc.want {
+				t.Errorf("Save was servable = %v but Supports said %v", servable, got)
+			}
+			if !tc.want && reason == "" {
+				t.Error("an unsupported command must explain itself")
+			}
+		})
+	}
+}
+
+// A probe must never perform what it is asking about — the one way this
+// could be actively harmful.
+func TestSupportsDoesNotRunTheCommand(t *testing.T) {
+	agent, url := newFakeAgent(t)
+	agent.set("running")
+	agent.setBridge(true, "ping", "save")
+	c := newClient(t, url)
+
+	if ok, _ := prober(t, c).Supports(context.Background(), "save"); !ok {
+		t.Fatal("expected save to be supported")
+	}
+	agent.mu.Lock()
+	defer agent.mu.Unlock()
+	if agent.lastCommand != nil {
+		t.Errorf("probing sent a command to the bridge: %v", agent.lastCommand)
+	}
+}
+
+// Shutdown is not the bridge's to offer, however the mod is configured.
+func TestSupportsRefusesShutdownEvenWithAFullBridge(t *testing.T) {
+	agent, url := newFakeAgent(t)
+	agent.set("running")
+	agent.setBridge(true, "ping", "save", "shutdown")
+	c := newClient(t, url)
+
+	if ok, reason := prober(t, c).Supports(context.Background(), "shutdown"); ok || reason == "" {
+		t.Errorf("Supports(shutdown) = %v, %q; want a refusal with a reason", ok, reason)
+	}
+}

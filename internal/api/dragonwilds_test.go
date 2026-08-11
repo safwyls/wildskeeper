@@ -172,3 +172,74 @@ func TestDragonwildsFeaturesOnServerPayload(t *testing.T) {
 		}
 	}
 }
+
+// The capabilities endpoint is what lets the console stop guessing. A
+// Dragonwilds server with no agent — so no bridge — must report its
+// commands as unavailable *and* say why, because that reason is the only
+// thing telling an operator what would light them up.
+func TestDragonwildsCapabilitiesReportTheMissingBridge(t *testing.T) {
+	app, admin := newTestAppWithAdmin(t)
+	id := newDragonwildsServer(t, app, "")
+
+	rec := app.do(t, http.MethodGet, fmt.Sprintf("/api/servers/%d/capabilities", id), nil, admin)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("capabilities: %d %s", rec.Code, rec.Body)
+	}
+	var got struct {
+		Probed   bool `json:"probed"`
+		Commands map[string]struct {
+			Supported bool   `json:"supported"`
+			Reason    string `json:"reason"`
+		} `json:"commands"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if !got.Probed {
+		t.Error("dragonwilds should be probeable; the UI falls back to optimism otherwise")
+	}
+	save, ok := got.Commands["save"]
+	if !ok {
+		t.Fatal("no answer for save")
+	}
+	if save.Supported {
+		t.Error("save reported supported with no agent, and so no bridge")
+	}
+	if !strings.Contains(save.Reason, "dwbridge") {
+		t.Errorf("reason should name what's missing, got %q", save.Reason)
+	}
+	// The endpoint answers for every command the console might offer, so a
+	// caller never has to special-case a missing key.
+	for _, op := range []string{"broadcast", "kick", "ban", "unban", "shutdown"} {
+		if _, ok := got.Commands[op]; !ok {
+			t.Errorf("no answer for %s", op)
+		}
+	}
+}
+
+// A game whose client can't be probed must not be reported as incapable —
+// that would hide working controls. Absent knowledge, the answer is the
+// optimism every caller had before probing existed.
+func TestCapabilitiesDefaultToSupportedForAnUnprobeableGame(t *testing.T) {
+	app, admin := newTestAppWithAdmin(t)
+	_, addr := newFakeGame(t)
+	id := newServerPointingAt(t, app, addr, nil)
+
+	rec := app.do(t, http.MethodGet, fmt.Sprintf("/api/servers/%d/capabilities", id), nil, admin)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("capabilities: %d %s", rec.Code, rec.Body)
+	}
+	var got struct {
+		Probed   bool                      `json:"probed"`
+		Commands map[string]map[string]any `json:"commands"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Probed {
+		t.Error("the test game has no prober, so probed should be false")
+	}
+	if supported, _ := got.Commands["save"]["supported"].(bool); !supported {
+		t.Error("an unprobeable game must not have its commands hidden")
+	}
+}
