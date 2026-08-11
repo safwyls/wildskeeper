@@ -224,41 +224,48 @@ export function ServerPower({
         </div>
       </div>
 
+      {/* Five nowrap buttons are wider than a phone, so the cluster wraps —
+          but at the seam the actions already have rather than wherever the
+          line happens to run out. The two groups below are atomic: the
+          process trio moves to its own line intact before any button inside
+          it breaks away. */}
       {(!powerOff || canSave) && (
-        <div className="flex items-center gap-2">
+        <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end">
           {!powerOff && !allowed && (
             <span className="text-xs text-wk-parchment/40">You don't have power permission</span>
           )}
-          {/* Logs share the power grant — same gate as the endpoint. */}
-          {!powerOff && allowed && (
-            <Button variant="secondary" size="sm" disabled={!powerAvailable} onClick={() => setLogsOpen(true)}>
-              <ScrollText className="h-4 w-4" />
-              Logs
-            </Button>
-          )}
-          {/* A world action, not a process action, so it sits ahead of the
-              power group — and unlike them it stays for agent-managed
-              servers, where the bridge is the only lever. Docker knowing the
-              container is down is the one case worth disabling for; in
-              agent-managed mode the honest 501/502 speaks instead. */}
-          {canSave && (
-            <Button
-              variant="secondary"
-              size="sm"
-              disabled={save.isPending || (!powerOff && powerAvailable && !running)}
-              title={
-                !powerOff && powerAvailable && !running
-                  ? "The server is not running"
-                  : "Ask the game to write the world to disk now"
-              }
-              onClick={() => save.mutate()}
-            >
-              <Save className="h-4 w-4" />
-              {save.isPending ? "Saving…" : "Save world"}
-            </Button>
-          )}
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Logs share the power grant — same gate as the endpoint. */}
+            {!powerOff && allowed && (
+              <Button variant="secondary" size="sm" disabled={!powerAvailable} onClick={() => setLogsOpen(true)}>
+                <ScrollText className="h-4 w-4" />
+                Logs
+              </Button>
+            )}
+            {/* A world action, not a process action, so it sits ahead of the
+                power group — and unlike them it stays for agent-managed
+                servers, where the bridge is the only lever. Docker knowing the
+                container is down is the one case worth disabling for; in
+                agent-managed mode the honest 501/502 speaks instead. */}
+            {canSave && (
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={save.isPending || (!powerOff && powerAvailable && !running)}
+                title={
+                  !powerOff && powerAvailable && !running
+                    ? "The server is not running"
+                    : "Ask the game to write the world to disk now"
+                }
+                onClick={() => save.mutate()}
+              >
+                <Save className="h-4 w-4" />
+                {save.isPending ? "Saving…" : "Save world"}
+              </Button>
+            )}
+          </div>
           {!powerOff && (
-            <>
+            <div className="flex flex-wrap items-center gap-2">
               <Button
                 variant="secondary"
                 size="sm"
@@ -286,7 +293,7 @@ export function ServerPower({
                 <Square className="h-4 w-4" />
                 Stop
               </Button>
-            </>
+            </div>
           )}
         </div>
       )}
@@ -305,7 +312,7 @@ export function ServerPower({
                 : "Stuck after a Dragonwilds patch? Clear the cache or re-run the update."}
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {agentUrl && (
               <Button
                 variant="secondary"
@@ -399,14 +406,29 @@ export function ServerPower({
                 <DialogTitle>{CONFIRM[confirming].title}</DialogTitle>
                 <DialogDescription>{CONFIRM[confirming].body}</DialogDescription>
               </DialogHeader>
-              <DialogFooter>
+              {/* The footer stacks on a phone, where three buttons with no
+                  gap read as one control; the desktop row keeps the
+                  primitive's own spacing. */}
+              <DialogFooter className="gap-2 sm:gap-0">
                 <Button variant="outline" onClick={() => setConfirming(null)}>
                   Cancel
+                </Button>
+                <Button
+                  variant={confirming === "stop" ? "destructive" : "default"}
+                  disabled={act.isPending || save.isPending}
+                  onClick={() => act.mutate(confirming)}
+                >
+                  {act.isPending ? "Working…" : CONFIRM[confirming].verb}
                 </Button>
                 {/* The warning above carries its own remedy: save first, and
                     only go down if the save landed. A refused save (no
                     dwbridge, agent down) toasts its reason and leaves the
-                    dialog open — plain Stop/Restart is still right there. */}
+                    dialog open — plain Stop/Restart is still right there.
+                    Last in the footer so it takes the primary position in
+                    both directions the footer lays out: rightmost on a
+                    desktop row, topmost in the phone's reversed stack. The
+                    warning's own answer should not sit below the action it
+                    warns about. */}
                 {confirming !== "start" && canSave && (
                   <Button
                     variant="secondary"
@@ -421,13 +443,6 @@ export function ServerPower({
                     {save.isPending ? "Saving…" : `Save world, then ${confirming}`}
                   </Button>
                 )}
-                <Button
-                  variant={confirming === "stop" ? "destructive" : "default"}
-                  disabled={act.isPending || save.isPending}
-                  onClick={() => act.mutate(confirming)}
-                >
-                  {act.isPending ? "Working…" : CONFIRM[confirming].verb}
-                </Button>
               </DialogFooter>
             </>
           )}
