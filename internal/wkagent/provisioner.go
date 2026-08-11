@@ -444,3 +444,118 @@ func validateProvisionerConfig(cfg *Config) (*dockerctl.Client, error) {
 	}
 	return dockerctl.New(cfg.DockerHost)
 }
+
+// RecreateRequest asks for a provisioned agent container to be rebuilt on a
+// different image.
+type RecreateRequest struct {
+	// Container is the existing container's name.
+	Container string `json:"container"`
+	// ImageTag is the wkagent channel to move to, e.g. "latest-wine".
+	ImageTag string `json:"imageTag"`
+}
+
+type RecreateResult struct {
+	Container string `json:"container"`
+	Image     string `json:"image"`
+	Previous  string `json:"previousImage"`
+}
+
+// handleRecreate rebuilds a provisioned agent container on a new image,
+// keeping everything else exactly as it was.
+//
+// Docker has no "change the image" operation — only create — so swapping
+// one means removing and rebuilding the container. That is easy to do
+// destructively and hard to do faithfully, which is why it lives here
+// rather than in a runbook: this provisioner created these containers, can
+// read their configuration back, and can put every part of it back.
+// Without it, moving a server to the Wine image means hand-writing a
+// docker run on a host whose orchestrator does not manage these containers
+// at all.
+//
+// The world is not at risk: it lives in a host bind mount under the data
+// root, which is captured and re-attached, and ContainerRemove never takes
+// volumes with it.
+func (a *Agent) handleRecreate(w http.ResponseWriter, r *http.Request) {
+	var req RecreateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.Container == "" {
+		writeError(w, http.StatusBadRequest, "container is required")
+		return
+	}
+	if !tagPattern.MatchString(req.ImageTag) {
+		writeError(w, http.StatusBadRequest, "invalid image tag")
+		return
+	}
+
+	// Same ownership gate as destroy: this provisioner rebuilds what it
+	// made, and nothing else on the host.
+	containers, err := a.docker.ContainerList(r.Context())
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	var found *dockerctl.ContainerSummary
+	for i := range containers {
+		if containers[i].Name == req.Container {
+			found = &containers[i]
+			break
+		}
+	}
+	if found == nil {
+		writeError(w, http.StatusNotFound, "no container with that name")
+		return
+	}
+	if found.Labels["wildskeeper.provisioned"] != "true" {
+		writeError(w, http.StatusBadRequest,
+			"that container was not created by this provisioner — change its image wherever it was deployed")
+		return
+	}
+
+	spec, err := a.docker.InspectSpec(r.Context(), found.ID)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "reading the container's configuration: "+err.Error())
+		return
+	}
+	previous := spec.Image
+	image := "ghcr.io/safwyls/wkagent:" + req.ImageTag
+	if image == previous {
+		writeJSON(w, http.StatusOK, RecreateResult{Container: req.Container, Image: image, Previous: previous})
+		return
+	}
+
+	// Pull before removing anything. A tag that doesn't exist must fail
+	// while the old container is still there, not after it's gone.
+	if err := a.docker.ImagePull(r.Context(), image); err != nil {
+		writeError(w, http.StatusBadGateway, "pulling "+image+": "+err.Error())
+		return
+	}
+	spec.Image = image
+
+	// Stop first so the supervisor gets its grace period and the game
+	// flushes the world — the same courtesy destroy pays, for the same
+	// reason.
+	if err := a.docker.Stop(r.Context(), found.ID); err != nil {
+		a.cfg.Logger.Warn("stop before recreate failed; attempting remove anyway", "container", req.Container, "error", err)
+	}
+	if err := a.docker.ContainerRemove(r.Context(), found.ID); err != nil {
+		writeError(w, http.StatusBadGateway, "removing the old container: "+err.Error())
+		return
+	}
+	if _, err := a.docker.ContainerCreate(r.Context(), *spec); err != nil {
+		// The old container is already gone, so say plainly what state the
+		// host is in rather than leaving it to be discovered.
+		a.cfg.Logger.Error("recreate failed after removing the old container", "container", req.Container, "error", err)
+		writeError(w, http.StatusBadGateway,
+			"the old container was removed but the new one could not be created ("+err.Error()+"); the world data is safe in the data directory")
+		return
+	}
+	if err := a.docker.Start(r.Context(), req.Container); err != nil {
+		writeError(w, http.StatusBadGateway, "recreated but failed to start: "+err.Error())
+		return
+	}
+	a.cfg.Logger.Info("recreated server agent", "container", req.Container, "from", previous, "to", image)
+	writeJSON(w, http.StatusOK, RecreateResult{Container: req.Container, Image: image, Previous: previous})
+}

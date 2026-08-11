@@ -476,8 +476,10 @@ export function ServerPower({
  * rather than discovered afterwards.
  */
 function LaunchMode({ serverId, canEdit }: { serverId: number; canEdit: boolean }) {
+  const { isAdmin } = useAuth();
   const queryClient = useQueryClient();
   const [switchTo, setSwitchTo] = useState<string | null>(null);
+  const [rebuildOpen, setRebuildOpen] = useState(false);
 
   const launchQuery = useQuery({
     queryKey: ["launch", serverId],
@@ -502,6 +504,23 @@ function LaunchMode({ serverId, canEdit }: { serverId: number; canEdit: boolean 
     onError: (err) => toast.error("Could not change the launch mode", { description: errorDetail(err) }),
   });
 
+  // Provisioned agent containers belong to no orchestrator — they are not
+  // in a TrueNAS apps list or a compose file — so the provisioner that made
+  // them is the only thing that can move them to another image without
+  // hand-written docker on the host.
+  const rebuild = useMutation({
+    mutationFn: (imageTag: string) => api.recreateAgent(serverId, imageTag),
+    onSuccess: (res) => {
+      toast.success("Agent rebuilt", { description: `Now running ${res.image}` });
+      setRebuildOpen(false);
+      // The agent is a new container: everything read from it is stale.
+      for (const key of ["launch", "capabilities", "steam-update", "container", "server-info"]) {
+        queryClient.invalidateQueries({ queryKey: [key, serverId] });
+      }
+    },
+    onError: (err) => toast.error("Could not rebuild the agent", { description: errorDetail(err) }),
+  });
+
   const launch = launchQuery.data;
   // A companion-mode agent (400) has no build to choose, and a server whose
   // agent is down shouldn't grow a broken control — in both cases the row
@@ -514,13 +533,24 @@ function LaunchMode({ serverId, canEdit }: { serverId: number; canEdit: boolean 
       <div className="min-w-0">
         <p className="font-display text-sm font-bold">Launch mode</p>
         <p className="text-xs text-wk-parchment/40">
-          {launch.pendingRestart
+          {launch.runnable === false
+            ? "This agent's image has no Wine in it, so this build cannot start. Rebuild the agent on the Wine image."
+            : launch.pendingRestart
             ? `Running the previous build — restart to switch to ${LAUNCH_PROFILES[launch.profile]?.label ?? launch.profile}.`
             : !launch.installed
               ? "This build isn't downloaded yet — run Update server below, then start."
               : (LAUNCH_PROFILES[launch.profile]?.blurb ??
                 (launch.mods ? "Can run the dwbridge mod." : "No mod support."))}
         </p>
+        {launch.runnable === false && isAdmin && (
+          <button
+            type="button"
+            onClick={() => setRebuildOpen(true)}
+            className="mt-1 text-xs font-semibold text-wk-brasshi underline-offset-2 hover:underline"
+          >
+            Rebuild agent on the Wine image →
+          </button>
+        )}
       </div>
       {options.length > 1 && (
         <div className="flex items-center gap-1 rounded-lg bg-wk-ink p-1">
@@ -544,6 +574,28 @@ function LaunchMode({ serverId, canEdit }: { serverId: number; canEdit: boolean 
           })}
         </div>
       )}
+
+      <Dialog open={rebuildOpen} onOpenChange={(open) => !open && setRebuildOpen(false)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Rebuild the agent on the Wine image?</DialogTitle>
+            <DialogDescription>
+              Wildskeeper stops this server, removes its agent container and creates it again from
+              <code className="mx-1 font-mono">wkagent:latest-wine</code>, keeping the same settings, ports and data
+              directory. Your world and configuration live in the data directory and are not touched. The image is
+              large, so the pull can take several minutes.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button variant="outline" onClick={() => setRebuildOpen(false)}>
+              Cancel
+            </Button>
+            <Button disabled={rebuild.isPending} onClick={() => rebuild.mutate("latest-wine")}>
+              {rebuild.isPending ? "Rebuilding…" : "Rebuild agent"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={switchTo !== null} onOpenChange={(open) => !open && setSwitchTo(null)}>
         <DialogContent>

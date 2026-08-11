@@ -54,6 +54,7 @@ describe("ServerPower launch mode", () => {
     label: "Native Linux build",
     mods: false,
     installed: true,
+    runnable: true,
     available: ["native", "wine"],
     pendingRestart: false,
     configPath: "RSDragonwilds/Saved/Config/LinuxServer/DedicatedServer.ini",
@@ -112,6 +113,45 @@ describe("ServerPower launch mode", () => {
     renderWithAgent();
 
     expect(await screen.findByText(/restart to switch to Windows \+ mods/i)).toBeInTheDocument();
+  });
+
+  it("offers to rebuild the agent when its image cannot run the chosen build", async () => {
+    // The Wine profile selected on an agent image with no Wine in it. This
+    // is the state a TrueNAS operator lands in: the container was
+    // provisioned from the plain image and nothing in their apps view can
+    // change it, so the console has to offer the rebuild itself.
+    vi.spyOn(api, "serverLaunch").mockResolvedValue({
+      ...nativeLaunch,
+      profile: "wine",
+      mods: true,
+      runnable: false,
+    });
+    const rebuild = vi.spyOn(api, "recreateAgent").mockResolvedValue({
+      container: "wkagent-ashenfall",
+      image: "ghcr.io/safwyls/wkagent:latest-wine",
+      previousImage: "ghcr.io/safwyls/wkagent:latest",
+    });
+    renderWithAgent();
+
+    expect(await screen.findByText(/has no Wine in it/i)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /Rebuild agent on the Wine image/i }));
+
+    // Removing and recreating a container is worth confirming, and the
+    // dialog has to say the world survives it.
+    expect(await screen.findByText(/not touched/i)).toBeInTheDocument();
+    expect(rebuild).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole("button", { name: "Rebuild agent" }));
+    await waitFor(() => expect(rebuild).toHaveBeenCalledWith(1, "latest-wine"));
+    expect(toastSuccess).toHaveBeenCalledWith("Agent rebuilt", expect.anything());
+  });
+
+  it("does not offer a rebuild when the image can already run the build", async () => {
+    vi.spyOn(api, "serverLaunch").mockResolvedValue({ ...nativeLaunch, profile: "wine", mods: true, runnable: true });
+    renderWithAgent();
+
+    await screen.findByText("Launch mode");
+    expect(screen.queryByRole("button", { name: /Rebuild agent/i })).not.toBeInTheDocument();
   });
 
   it("shows no launch row for an agent that doesn't run the game", async () => {

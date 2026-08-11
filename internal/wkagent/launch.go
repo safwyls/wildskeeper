@@ -3,6 +3,7 @@ package wkagent
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -218,4 +219,21 @@ func validProfile(name string) bool {
 		}
 	}
 	return false
+}
+
+// runnable reports whether the profile's command can actually be executed
+// here — for the Wine profile, whether this image has Wine in it at all.
+//
+// It is not the same question as "is the game installed": an agent running
+// the plain image can be *set* to the Wine profile and will then fail at
+// exec with nothing useful to say. Answering it up front lets the console
+// explain the real fix (move this agent to the Wine image) instead of
+// showing a start button that cannot work.
+func (p Profile) runnable(installDir string) bool {
+	if !strings.ContainsAny(p.Command, `/\`) {
+		_, err := exec.LookPath(p.Command)
+		return err == nil
+	}
+	_, err := os.Stat(p.resolveCommand(installDir))
+	return err == nil
 }

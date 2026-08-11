@@ -281,6 +281,10 @@ export interface Launch {
   label: string;
   /** Whether this build can carry the mod, and so run commands at all. */
   mods: boolean;
+  /** Whether the launcher exists on this agent at all. False for the Wine
+   * build on an agent image with no Wine in it — a different problem from
+   * "not installed", fixable only by moving the agent to another image. */
+  runnable: boolean;
   /** Whether the selected build's files are present. False between a switch
    * and the re-install it needs. */
   installed: boolean;
@@ -924,6 +928,13 @@ export const api = {
   // Which game build the agent launches. Throws a 400 ApiError when the
   // server has no agent, or has one that doesn't run the game.
   serverLaunch: (id: number) => request<Launch>(`/servers/${id}/launch`),
+  // Rebuild this server's agent container on another wkagent image,
+  // through the provisioner that created it.
+  recreateAgent: (id: number, imageTag: string) =>
+    request<{ container: string; image: string; previousImage: string }>(`/servers/${id}/agent/image`, {
+      method: "POST",
+      body: JSON.stringify({ imageTag }),
+    }),
   setServerLaunch: (id: number, profile: string) =>
     request<Launch>(`/servers/${id}/launch`, { method: "PUT", body: JSON.stringify({ profile }) }),
   setWatchdog: (id: number, enabled: boolean) =>

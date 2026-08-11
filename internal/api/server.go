@@ -160,6 +160,10 @@ func (s *Server) Routes(staticFS fs.FS) http.Handler {
 				// the next start actually runs.
 				r.Get("/launch", s.handleGetLaunch)
 				r.With(s.requirePermission(store.PermPower)).Put("/launch", s.handleSetLaunch)
+				// Rebuild this server's agent on another wkagent image.
+				// Admin-only: it destroys and recreates a container, which
+				// is provisioning, not day-to-day power.
+				r.With(s.requireAdmin).Post("/agent/image", s.handleRecreateAgent)
 				r.With(s.requirePermission(store.PermPower)).Post("/steam-cache/clear", s.handleClearSteamCache)
 				r.With(s.requirePermission(store.PermPower)).Post("/steam/update", s.handleSteamUpdateStart)
 				r.With(s.requirePermission(store.PermPower)).Get("/steam/update", s.handleSteamUpdateStatus)

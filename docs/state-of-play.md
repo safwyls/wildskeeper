@@ -227,8 +227,21 @@ What's left in Phase 4, in the order worth attempting:
    **Deploying it.** The provisioner needs no change — it doesn't run
    games. The per-server agent container is what needs Wine, via the
    `latest-wine` image tag (Deployment details in the Raise-a-server
-   wizard, or recreate an existing agent with that tag). CI publishes it
-   from `Dockerfile.wkagent-wine`; the plain `latest` stays Wine-free.
+   wizard). CI publishes it from `Dockerfile.wkagent-wine`; the plain
+   `latest` stays Wine-free.
+
+   For a server that *already exists*, there is now a button:
+   `POST /v1/provision/recreate` on the provisioner reads a container's
+   configuration back with `dockerctl.InspectSpec` and rebuilds it on
+   another image, keeping env, binds, ports, user, labels, restart policy
+   and networks. This exists because provisioner-made containers belong to
+   no orchestrator — they are not in a TrueNAS apps list or any compose
+   file — so the alternative was hand-written docker on the host. The
+   agent reports `launch.runnable` (is the launcher actually present in
+   this image?), and the console offers the rebuild exactly when a Wine
+   profile is selected on an image with no Wine in it. The image is pulled
+   before anything is removed, so a bad tag fails while the old container
+   is still running.
 
    **What is proven and what is not.** A stub `wine` on PATH proves the
    whole launch path — PATH resolution, the exe, the port, the env, the

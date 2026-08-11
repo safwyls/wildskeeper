@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -81,6 +82,11 @@ type ContainerSpec struct {
 	Labels map[string]string
 	// RestartUnlessStopped applies docker's unless-stopped policy.
 	RestartUnlessStopped bool
+	// Networks are user-defined networks to attach at creation. Recreating
+	// a container without them would silently cut it off from anything it
+	// reached by service name, so InspectSpec captures them and
+	// ContainerCreate puts them back.
+	Networks []string
 }
 
 // ContainerCreate creates (but does not start) a container; pair with the
@@ -113,6 +119,13 @@ func (c *Client) ContainerCreate(ctx context.Context, spec ContainerSpec) (strin
 	}
 	if len(spec.Labels) > 0 {
 		payload["Labels"] = spec.Labels
+	}
+	if len(spec.Networks) > 0 {
+		endpoints := map[string]any{}
+		for _, n := range spec.Networks {
+			endpoints[n] = map[string]any{}
+		}
+		payload["NetworkingConfig"] = map[string]any{"EndpointsConfig": endpoints}
 	}
 
 	body, err := json.Marshal(payload)
@@ -238,4 +251,83 @@ func (c *Client) InspectEnv(ctx context.Context, id string) ([]string, error) {
 		return nil, fmt.Errorf("parsing inspect response: %w", err)
 	}
 	return payload.Config.Env, nil
+}
+
+// InspectSpec reads a container's configuration back into the shape that
+// created it, so a caller can recreate it with one field changed.
+//
+// This is how an image is swapped under a container that no orchestrator
+// owns: docker has no "change the image" operation, only create, so the
+// only faithful path is to read everything back and build it again. What
+// is captured is what a provisioned agent depends on — image, user,
+// environment, bind mounts, published ports, labels, restart policy and
+// networks. Anything outside that set is not reproduced, which is why this
+// is used for containers this provisioner created rather than arbitrary
+// ones.
+func (c *Client) InspectSpec(ctx context.Context, container string) (*ContainerSpec, error) {
+	body, status, err := c.do(ctx, http.MethodGet, "/containers/"+url.PathEscape(container)+"/json", 15*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	if status != http.StatusOK {
+		return nil, dockerError("inspect", status, body)
+	}
+	var payload struct {
+		Name   string `json:"Name"`
+		Config struct {
+			Image  string            `json:"Image"`
+			User   string            `json:"User"`
+			Env    []string          `json:"Env"`
+			Labels map[string]string `json:"Labels"`
+		} `json:"Config"`
+		HostConfig struct {
+			Binds         []string `json:"Binds"`
+			RestartPolicy struct {
+				Name string `json:"Name"`
+			} `json:"RestartPolicy"`
+			PortBindings map[string][]struct {
+				HostPort string `json:"HostPort"`
+			} `json:"PortBindings"`
+		} `json:"HostConfig"`
+		NetworkSettings struct {
+			Networks map[string]struct{} `json:"Networks"`
+		} `json:"NetworkSettings"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, fmt.Errorf("parsing inspect response: %w", err)
+	}
+
+	spec := &ContainerSpec{
+		Name:                 strings.TrimPrefix(payload.Name, "/"),
+		Image:                payload.Config.Image,
+		User:                 payload.Config.User,
+		Env:                  payload.Config.Env,
+		Binds:                payload.HostConfig.Binds,
+		Labels:               payload.Config.Labels,
+		RestartUnlessStopped: payload.HostConfig.RestartPolicy.Name == "unless-stopped",
+		Ports:                map[int]string{},
+	}
+	for containerPort, hosts := range payload.HostConfig.PortBindings {
+		for _, h := range hosts {
+			hostPort, err := strconv.Atoi(h.HostPort)
+			if err != nil {
+				// An unbound or dynamically-assigned publish can't be
+				// reproduced faithfully; skipping it is better than
+				// inventing a port the operator never chose.
+				continue
+			}
+			spec.Ports[hostPort] = containerPort
+		}
+	}
+	for name := range payload.NetworkSettings.Networks {
+		// The default bridge is what a container gets with no networks
+		// declared, so re-declaring it would be both redundant and, for
+		// "bridge" specifically, rejected as a user-defined network.
+		if name == "bridge" {
+			continue
+		}
+		spec.Networks = append(spec.Networks, name)
+	}
+	sort.Strings(spec.Networks)
+	return spec, nil
 }

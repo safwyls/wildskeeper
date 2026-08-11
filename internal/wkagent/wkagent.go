@@ -271,6 +271,10 @@ func (a *Agent) Handler() http.Handler {
 		// discovery, and adoption (secret recovery for wkagent
 		// containers the control plane lost track of).
 		r.Post("/provision", a.handleProvision)
+		// Rebuild a provisioned agent on a different image — the only
+		// non-manual way to move one to the Wine channel, since nothing
+		// else on the host manages these containers.
+		r.Post("/provision/recreate", a.handleRecreate)
 		r.Get("/discover", a.handleDiscover)
 		r.Post("/adopt", a.handleAdopt)
 		// Destroy is create's inverse and is gated on the label create
@@ -563,6 +567,11 @@ type LaunchStatus struct {
 	// False after a switch and before the re-install it requires, which is
 	// exactly when an operator most needs telling.
 	Installed bool `json:"installed"`
+	// Runnable reports whether the profile's launcher exists on this agent.
+	// False for the Wine profile on an image with no Wine in it — a
+	// different failure from "the game isn't installed", and one only a
+	// redeploy of the agent itself can fix.
+	Runnable bool `json:"runnable"`
 	// Available are the profiles the console may select. Empty when the
 	// agent runs an explicit command (ProfileCustom), which the console
 	// must not silently replace.
@@ -592,6 +601,7 @@ func (a *Agent) launchStatus() *LaunchStatus {
 		Label:      p.Label,
 		Mods:       p.Mods,
 		Installed:  p.installed(a.cfg.InstallDir),
+		Runnable:   p.runnable(a.cfg.InstallDir),
 		ConfigPath: p.ConfigRel,
 	}
 	if p.Name != ProfileCustom {

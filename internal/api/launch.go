@@ -67,3 +67,42 @@ func (s *Server) handleSetLaunch(w http.ResponseWriter, r *http.Request) {
 	s.audit(r, srv.ID, "launch-profile", req.Profile)
 	writeJSON(w, http.StatusOK, status)
 }
+
+// handleRecreateAgent moves a provisioned server's agent onto a different
+// wkagent image — in practice, onto the Wine variant so it can run the
+// modded build.
+//
+// This exists because provisioner-created containers belong to no
+// orchestrator: they don't appear in a TrueNAS apps list or any compose
+// file, so changing their image otherwise means hand-writing docker
+// commands on the host. The provisioner made them and can rebuild them,
+// which makes this a button instead of a runbook.
+func (s *Server) handleRecreateAgent(w http.ResponseWriter, r *http.Request) {
+	srv, ok := s.loadServer(w, r)
+	if !ok {
+		return
+	}
+	var req struct {
+		ImageTag string `json:"imageTag"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if s.Provisioner == nil {
+		writeError(w, http.StatusBadRequest,
+			"no provisioner is configured, so Wildskeeper cannot rebuild this container — change its image where it was deployed")
+		return
+	}
+	if srv.ContainerName == "" {
+		writeError(w, http.StatusBadRequest, "this server has no container name recorded, so there is nothing to rebuild")
+		return
+	}
+	result, err := s.Provisioner.RecreateAgent(r.Context(), srv.ContainerName, req.ImageTag)
+	if err != nil {
+		writeAgentError(w, err)
+		return
+	}
+	s.audit(r, srv.ID, "agent-image", result.Image)
+	writeJSON(w, http.StatusOK, result)
+}

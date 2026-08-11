@@ -110,3 +110,16 @@ func (c *Client) Adopt(ctx context.Context, container string) (*AdoptResult, err
 	}
 	return &res, nil
 }
+
+// RecreateAgent rebuilds a provisioned agent container on a different
+// wkagent image, keeping its configuration. The timeout is generous
+// because it pulls an image first — the Wine variant is well over a
+// gigabyte, and a slow pull is not a failure.
+func (c *Client) RecreateAgent(ctx context.Context, container, imageTag string) (*wkagent.RecreateResult, error) {
+	var res wkagent.RecreateResult
+	req := wkagent.RecreateRequest{Container: container, ImageTag: imageTag}
+	if err := c.do(ctx, http.MethodPost, "/v1/provision/recreate", req, &res, 15*time.Minute); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
