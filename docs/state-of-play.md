@@ -160,6 +160,13 @@ The pieces, all committed:
 - **dragonwilds client** — commands route through the bridge when the
   heartbeat lists them; otherwise the honest 501 stands. `save` is live;
   the rest map to real functions but await the mod implementing them.
+- **the dashboard** — on-demand save is a first-class control (2026-08-11):
+  a Save world button in the Overview's power row (kept even for
+  agent-managed servers, where docker power hides) and on the World-saves
+  page, plus a "Save world, then stop/restart" action inside the power
+  confirmations — the interactive half of roadmap item 13's
+  warn → save → stop → start chain. Capability is still discovered by
+  doing: no bridge means the button's toast relays the 501's reason.
 
 What's left in Phase 4, in the order worth attempting:
 

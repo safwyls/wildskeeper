@@ -1,7 +1,7 @@
 import { useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { api, type WorldInfo } from "../../lib/api";
+import { api, errorDetail, type WorldInfo } from "../../lib/api";
 import { useAuth } from "../../lib/auth";
 import { agoLabel } from "../../lib/time";
 import { WkNote, WkPanel } from "../../components/wildskeeper/WkPanel";
@@ -63,7 +63,7 @@ function WorldPanel({ world }: { world: WorldInfo }) {
 export function WkSaves() {
   const { serverID } = useParams();
   const id = Number(serverID);
-  const { isAdmin } = useAuth();
+  const { isAdmin, can } = useAuth();
   const queryClient = useQueryClient();
 
   const backupsQuery = useQuery({
@@ -97,6 +97,18 @@ export function WkSaves() {
       invalidate();
     },
     onError: (e: Error) => toast.error(e.message || "Delete failed"),
+  });
+  // On-demand save through the dwbridge mod. The world panel is the
+  // confirmation: "Last written" ticks to just now and the save revision
+  // counts up, so refetch it. A server with no bridge answers 501 with its
+  // own reason, which the toast relays.
+  const saveWorld = useMutation({
+    mutationFn: () => api.save(id),
+    onSuccess: () => {
+      toast.success("World saved");
+      queryClient.invalidateQueries({ queryKey: ["world", id] });
+    },
+    onError: (e) => toast.error("Save failed", { description: errorDetail(e) ?? (e as Error).message }),
   });
 
   if (!isAdmin) {
@@ -146,7 +158,7 @@ export function WkSaves() {
           )}
           {backups?.available && (
             <>
-              <div className="mb-3 flex items-center gap-2">
+              <div className="mb-3 flex flex-wrap items-center gap-2">
                 <button
                   onClick={() => run.mutate()}
                   disabled={run.isPending || backups.running}
@@ -154,6 +166,20 @@ export function WkSaves() {
                 >
                   {backups.running ? "Snapshot in progress…" : "Take snapshot now"}
                 </button>
+                {can("save") && (
+                  <button
+                    onClick={() => saveWorld.mutate()}
+                    disabled={saveWorld.isPending}
+                    title="Ask the game to write the world to disk now — snapshots read that file"
+                    className="rounded border border-wk-edge px-4 py-1.5 text-wk-mist transition hover:border-wk-brass hover:text-wk-brasshi disabled:opacity-50"
+                  >
+                    {saveWorld.isPending ? "Saving…" : "Save world"}
+                  </button>
+                )}
+                <span className="text-xs text-wk-mist">
+                  The game autosaves every ~5 minutes — Save world writes the live world first, so a snapshot is up to
+                  the second.
+                </span>
               </div>
               {backups.snapshots.length === 0 ? (
                 <p className="text-sm text-wk-mist">The vault is empty — take the first snapshot.</p>

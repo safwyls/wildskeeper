@@ -69,7 +69,11 @@ export function MobileTopBar({ server }: { server: Server | null }) {
 
   const save = useMutation({
     mutationFn: () => api.save(server!.id),
-    onSuccess: () => toast.success("World saved"),
+    onSuccess: () => {
+      toast.success("World saved");
+      // The Saves page's world panel is the visible proof — let it tick.
+      queryClient.invalidateQueries({ queryKey: ["world", server!.id] });
+    },
     onError: (err) => toast.error("Save failed", { description: errorDetail(err) }),
   });
 
