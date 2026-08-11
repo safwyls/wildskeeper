@@ -189,11 +189,41 @@ The pieces, all committed:
 
 What's left in Phase 4, in the order worth attempting:
 
-1. **A wkagent launch profile for the Wine + Windows build.** Pure
-   engineering, no unknowns: today it is `GAME_CMD`/`GAME_ARGS` config and
-   the live test ran the game by hand while a real agent drove the bridge
-   over the shared directory. This is what makes the modded stack
-   deployable rather than hand-run.
+1. ~~**A wkagent launch profile for the Wine + Windows build.**~~ **Built
+   2026-08-11, and untested against real Wine — see below.** The agent now
+   has launch *profiles* (`internal/wkagent/launch.go`): `native` (the
+   Linux build, no mods) and `wine` (the Windows build, the only one UE4SS
+   can attach to). A profile carries everything that differs between the
+   two builds, because it is more than a command line — different Steam
+   depot (`+@sSteamCmdForcePlatformType windows`, which must precede
+   `+login` or it is ignored), a different config directory
+   (`WindowsServer/`, not `LinuxServer/` — the ini editor would otherwise
+   edit a file the game never reads), a different "is it installed" probe,
+   and the environment the mod stack needs:
+   `WINEDLLOVERRIDES=version=n,b` (without it Wine prefers its builtin
+   version.dll and UE4SS never injects) plus `DWBRIDGE_DIR` as a
+   `Z:`-mapped Windows path (the mod reads it with Windows semantics; a
+   Linux path leaves the bridge idle with no error anywhere).
+
+   The selection persists in the install volume beside desired-state, is
+   reported in `health.launch`, and is changed through `PUT /v1/launch` →
+   `PUT /api/servers/{id}/launch` → a Launch mode control in the
+   dashboard's power card. It deliberately applies at the *next start*:
+   switching build is a re-install, not a restart, so the agent refuses to
+   decide that timing. `deploy/`-wise there is a second image,
+   `Dockerfile.wkagent-wine` — Wine adds >1 GB and most servers will never
+   want it, so the plain image stays small.
+
+   **What is proven and what is not.** A stub `wine` on PATH proves the
+   whole launch path — PATH resolution, the exe, the port, the env, the
+   working directory — reaches the process
+   (`TestWineProfileLaunchesThroughPathWithTheModEnvironment`). Nothing
+   here has been run against real Wine, a real Windows depot, or a real
+   UE4SS: this box has none of the three. The feasibility of the *stack*
+   was proven by hand on 2026-08-09 (`tools/ue4ss-wine-shim/README.md`);
+   what is unproven is this agent driving it. Expect the first real run to
+   find something — a path that needs to be `Z:`-mapped and isn't, a Wine
+   prefix permission, the exe name after a patch.
 2. **Ban via the ini.** `KnownPlayerList`'s `bIsBanned` flag is the one
    plausible route to offline ban/unban left standing, and dwconfig already
    owns that file safely. Needs one experiment: does the server honour a

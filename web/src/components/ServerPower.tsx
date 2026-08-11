@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Eraser, HardDriveDownload, Play, RotateCw, Save, ScrollText, Square } from "lucide-react";
 import { toast } from "sonner";
-import { api, ApiError, errorDetail } from "../lib/api";
+import { api, ApiError, errorDetail, LAUNCH_PROFILES } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { useCommand } from "../lib/capabilities";
 import { cn } from "../lib/utils";
@@ -307,6 +307,10 @@ export function ServerPower({
         </div>
       )}
 
+      {/* Launch mode sits directly above SteamCMD because that is the order
+          the work happens in: choose the build, then install it. */}
+      {agentUrl && <LaunchMode serverId={serverId} canEdit={allowed} />}
+
       {/* Maintenance strip: repair tools, not routine actions, so they sit
           below the power row rather than crowding it. Hidden entirely when
           neither an agent nor an install path is configured — same principle
@@ -458,5 +462,113 @@ export function ServerPower({
         </DialogContent>
       </Dialog>
     </section>
+  );
+}
+
+/**
+ * Which of the game's two builds the agent launches.
+ *
+ * This is the setting the rest of the console reads capability from: the
+ * native Linux build cannot load UE4SS, so a server on it will never save
+ * on demand however healthy it looks. Switching is not a toggle — the two
+ * builds come from different Steam depots — so the choice is confirmed, and
+ * the consequences (re-download, restart) are stated before it is made
+ * rather than discovered afterwards.
+ */
+function LaunchMode({ serverId, canEdit }: { serverId: number; canEdit: boolean }) {
+  const queryClient = useQueryClient();
+  const [switchTo, setSwitchTo] = useState<string | null>(null);
+
+  const launchQuery = useQuery({
+    queryKey: ["launch", serverId],
+    queryFn: () => api.serverLaunch(serverId),
+    retry: false,
+    staleTime: 30_000,
+  });
+
+  const select = useMutation({
+    mutationFn: (profile: string) => api.setServerLaunch(serverId, profile),
+    onSuccess: (launch) => {
+      toast.success(`Next start uses ${LAUNCH_PROFILES[launch.profile]?.label ?? launch.profile}`, {
+        description: launch.installed
+          ? "Restart the server to switch."
+          : "Run Update server to download this build, then start.",
+      });
+      setSwitchTo(null);
+      queryClient.invalidateQueries({ queryKey: ["launch", serverId] });
+      // Whether commands can work follows directly from the build.
+      queryClient.invalidateQueries({ queryKey: ["capabilities", serverId] });
+    },
+    onError: (err) => toast.error("Could not change the launch mode", { description: errorDetail(err) }),
+  });
+
+  const launch = launchQuery.data;
+  // A companion-mode agent (400) has no build to choose, and a server whose
+  // agent is down shouldn't grow a broken control — in both cases the row
+  // simply isn't there.
+  if (!launch?.profile) return null;
+  const options = launch.available ?? [];
+
+  return (
+    <div className="flex w-full flex-wrap items-center justify-between gap-3 border-t border-wk-edge pt-3">
+      <div className="min-w-0">
+        <p className="font-display text-sm font-bold">Launch mode</p>
+        <p className="text-xs text-wk-parchment/40">
+          {launch.pendingRestart
+            ? `Running the previous build — restart to switch to ${LAUNCH_PROFILES[launch.profile]?.label ?? launch.profile}.`
+            : !launch.installed
+              ? "This build isn't downloaded yet — run Update server below, then start."
+              : (LAUNCH_PROFILES[launch.profile]?.blurb ??
+                (launch.mods ? "Can run the dwbridge mod." : "No mod support."))}
+        </p>
+      </div>
+      {options.length > 1 && (
+        <div className="flex items-center gap-1 rounded-lg bg-wk-ink p-1">
+          {options.map((profile) => {
+            const active = profile === launch.profile;
+            return (
+              <button
+                key={profile}
+                type="button"
+                aria-pressed={active}
+                disabled={!canEdit || select.isPending}
+                onClick={() => !active && setSwitchTo(profile)}
+                className={cn(
+                  "rounded-md px-3 py-1 text-xs font-semibold transition disabled:opacity-50",
+                  active ? "bg-wk-ember text-wk-parchment" : "text-wk-parchment/60 hover:text-wk-parchment",
+                )}
+              >
+                {LAUNCH_PROFILES[profile]?.label ?? profile}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      <Dialog open={switchTo !== null} onOpenChange={(open) => !open && setSwitchTo(null)}>
+        <DialogContent>
+          {switchTo && (
+            <>
+              <DialogHeader>
+                <DialogTitle>Switch to the {LAUNCH_PROFILES[switchTo]?.label ?? switchTo} build?</DialogTitle>
+                <DialogDescription>
+                  {LAUNCH_PROFILES[switchTo]?.blurb} The two builds come from different Steam depots, so the game
+                  files have to be downloaded again with Update server before this one will start. Your world saves
+                  and settings are untouched. The change takes effect at the next start, not now.
+                </DialogDescription>
+              </DialogHeader>
+              <DialogFooter className="gap-2 sm:gap-0">
+                <Button variant="outline" onClick={() => setSwitchTo(null)}>
+                  Cancel
+                </Button>
+                <Button disabled={select.isPending} onClick={() => select.mutate(switchTo)}>
+                  {select.isPending ? "Switching…" : "Use this build"}
+                </Button>
+              </DialogFooter>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
+    </div>
   );
 }

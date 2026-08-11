@@ -65,11 +65,28 @@ func ClearCache(installRoot string) (int, error) {
 // and its tests agree on exactly what gets executed. SteamCMD is exec'd
 // directly (no shell), so each token is its own argv element.
 func UpdateArgs(installRoot string, appID int, validate bool) []string {
-	args := []string{
+	return UpdateArgsFor(installRoot, appID, validate, "")
+}
+
+// UpdateArgsFor is UpdateArgs for a specific platform's depot. Dragonwilds
+// ships its Linux and Windows dedicated servers under one app id, and only
+// the Windows one can carry UE4SS — so an agent set to the Wine launch
+// profile has to ask Steam for a build its host would never choose.
+//
+// The override has to come before +login: SteamCMD applies
+// @sSteamCmdForcePlatformType when it resolves the app, and a later flag is
+// simply ignored, which fails by quietly installing the host platform's
+// build instead of erroring.
+func UpdateArgsFor(installRoot string, appID int, validate bool, platform string) []string {
+	var args []string
+	if platform != "" {
+		args = append(args, "+@sSteamCmdForcePlatformType", platform)
+	}
+	args = append(args,
 		"+force_install_dir", installRoot,
 		"+login", "anonymous",
 		"+app_update", strconv.Itoa(appID),
-	}
+	)
 	if validate {
 		args = append(args, "validate")
 	}

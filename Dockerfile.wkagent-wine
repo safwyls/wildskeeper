@@ -1,0 +1,68 @@
+# wkagent, with Wine — for the WKAGENT_LAUNCH_PROFILE=wine launch profile.
+#
+# Why a second image rather than a build arg on the first: Wine plus its
+# 32-bit dependencies adds well over a gigabyte, and the overwhelming
+# majority of servers run the native Linux build and will never need it.
+# Paying that on every pull, for everyone, to serve the minority that wants
+# mods is the wrong default — so the plain image stays small and this one
+# exists for the deployments that have chosen the Windows build.
+#
+# What the extra weight buys: the Windows dedicated server can load UE4SS,
+# and UE4SS is the only way the dwbridge mod — and therefore on-demand
+# saves and any future command — can reach the game at all.
+#
+# Build:
+#   docker build -f Dockerfile.wkagent-wine -t ghcr.io/safwyls/wkagent:wine .
+#
+# The mod itself is not baked in. It is laid out next to the server exe in
+# the install volume (tools/dwbridge/README.md, "Install"), which is data,
+# not image: baking it would pin a mod version to an agent version and make
+# updating either one a rebuild.
+
+# ---- build ----
+FROM docker.io/library/golang:1.26-alpine AS build
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -o /out/wkagent ./cmd/wkagent
+
+# ---- runtime ----
+FROM docker.io/steamcmd/steamcmd:debian-12
+COPY --from=build /out/wkagent /usr/local/bin/wkagent
+
+# Wine from WineHQ rather than Debian's: the feasibility run that proved
+# UE4SS injects was on Wine 11, and Debian 12 ships far older. i386 is
+# required even for a 64-bit game — the Wine packages depend on it.
+RUN dpkg --add-architecture i386 \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates wget gnupg \
+    && wget -qO /etc/apt/keyrings/winehq-archive.key https://dl.winehq.org/wine-builds/winehq.key \
+    && wget -qNP /etc/apt/sources.list.d/ https://dl.winehq.org/wine-builds/debian/dists/bookworm/winehq-bookworm.sources \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends winehq-stable \
+    && apt-get purge -y gnupg && apt-get autoremove -y \
+    && rm -rf /var/lib/apt/lists/*
+
+# Same non-root rule as the plain image: the game refuses to boot as root.
+RUN useradd -m -u 1000 wkagent
+USER wkagent
+ENV HOME=/home/wkagent \
+    WKAGENT_INSTALL_DIR=/dragonwilds \
+    WKAGENT_STEAMCMD=steamcmd \
+    WKAGENT_ADDR=:8811 \
+    # The default this image exists for. It is only the *initial* selection:
+    # a choice already persisted in the install volume wins, so redeploying
+    # never silently changes which build a server runs.
+    WKAGENT_LAUNCH_PROFILE=wine \
+    # On the volume, so the prefix survives container recreation. Wine
+    # rebuilds a missing prefix on first run, which is slow and would
+    # otherwise happen on every deploy.
+    WKAGENT_WINE_PREFIX=/dragonwilds/.wine \
+    # A headless server has no display, and Wine's chatter would otherwise
+    # interleave with the game log the player list is parsed from.
+    WINEDEBUG=-all
+EXPOSE 8811 7777/udp 7778/udp
+HEALTHCHECK --interval=30s --timeout=5s \
+    CMD ["/usr/local/bin/wkagent", "-healthz"]
+ENTRYPOINT ["/usr/local/bin/wkagent"]

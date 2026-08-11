@@ -37,6 +37,94 @@ function renderPower() {
   return renderWithProviders(<ServerPower serverId={1} />);
 }
 
+describe("ServerPower launch mode", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    toastSuccess.mockClear();
+    toastError.mockClear();
+    vi.spyOn(api, "containerStatus").mockResolvedValue(runningState);
+    vi.spyOn(api, "steamUpdateStatus").mockResolvedValue({
+      job: null,
+      agent: { version: "test", apiVersion: 1, mode: "supervisor", installDirOk: true, diskFreeBytes: 0 },
+    });
+  });
+
+  const nativeLaunch = {
+    profile: "native",
+    label: "Native Linux build",
+    mods: false,
+    installed: true,
+    available: ["native", "wine"],
+    pendingRestart: false,
+    configPath: "RSDragonwilds/Saved/Config/LinuxServer/DedicatedServer.ini",
+  };
+
+  function renderWithAgent() {
+    return renderWithProviders(<ServerPower serverId={1} agentUrl="http://agent:8811" />);
+  }
+
+  it("confirms before switching build, naming the re-download it costs", async () => {
+    vi.spyOn(api, "serverLaunch").mockResolvedValue(nativeLaunch);
+    const set = vi.spyOn(api, "setServerLaunch").mockResolvedValue({
+      ...nativeLaunch,
+      profile: "wine",
+      mods: true,
+      installed: false,
+    });
+    renderWithAgent();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Windows + mods" }));
+
+    // Switching depots is not a restart, and the dialog has to say so before
+    // the click, not after.
+    expect(await screen.findByText(/different Steam depots/i)).toBeInTheDocument();
+    expect(set).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole("button", { name: "Use this build" }));
+    await waitFor(() => expect(set).toHaveBeenCalledWith(1, "wine"));
+    // The new build isn't downloaded, so the toast points at the next step
+    // rather than telling them to restart into something that isn't there.
+    expect(toastSuccess).toHaveBeenCalledWith(
+      expect.stringContaining("Windows + mods"),
+      expect.objectContaining({ description: expect.stringContaining("Update server") }),
+    );
+  });
+
+  it("marks the active build and does not re-select it", async () => {
+    vi.spyOn(api, "serverLaunch").mockResolvedValue(nativeLaunch);
+    const set = vi.spyOn(api, "setServerLaunch").mockResolvedValue(nativeLaunch);
+    renderWithAgent();
+
+    const active = await screen.findByRole("button", { name: "Native Linux" });
+    expect(active).toHaveAttribute("aria-pressed", "true");
+    await userEvent.click(active);
+    expect(set).not.toHaveBeenCalled();
+    expect(screen.queryByText(/different Steam depots/i)).not.toBeInTheDocument();
+  });
+
+  it("says a switch is waiting on a restart", async () => {
+    vi.spyOn(api, "serverLaunch").mockResolvedValue({
+      ...nativeLaunch,
+      profile: "wine",
+      mods: true,
+      pendingRestart: true,
+    });
+    renderWithAgent();
+
+    expect(await screen.findByText(/restart to switch to Windows \+ mods/i)).toBeInTheDocument();
+  });
+
+  it("shows no launch row for an agent that doesn't run the game", async () => {
+    // Companion mode answers 400 — there is no build to choose, so the
+    // control should be absent rather than broken.
+    vi.spyOn(api, "serverLaunch").mockRejectedValue(new ApiError(400, "this agent does not run the game"));
+    renderWithAgent();
+
+    await screen.findByRole("button", { name: "Stop" });
+    expect(screen.queryByText("Launch mode")).not.toBeInTheDocument();
+  });
+});
+
 describe("ServerPower on-demand save", () => {
   beforeEach(() => {
     vi.restoreAllMocks();

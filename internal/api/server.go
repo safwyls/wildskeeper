@@ -154,6 +154,12 @@ func (s *Server) Routes(staticFS fs.FS) http.Handler {
 				// to get a broken container updating again. Runs via the
 				// server's wkagent when configured, else the local
 				// install-path mount (cache clear only).
+				// Which game build the agent launches. Reading is open to
+				// anyone signed in (it explains why commands do or don't
+				// work); changing it is power territory — it decides what
+				// the next start actually runs.
+				r.Get("/launch", s.handleGetLaunch)
+				r.With(s.requirePermission(store.PermPower)).Put("/launch", s.handleSetLaunch)
 				r.With(s.requirePermission(store.PermPower)).Post("/steam-cache/clear", s.handleClearSteamCache)
 				r.With(s.requirePermission(store.PermPower)).Post("/steam/update", s.handleSteamUpdateStart)
 				r.With(s.requirePermission(store.PermPower)).Get("/steam/update", s.handleSteamUpdateStatus)

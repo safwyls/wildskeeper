@@ -81,6 +81,17 @@ func main() {
 		Mode:            envOr("WKAGENT_MODE", "companion"),
 		GameCommand:     os.Getenv("WKAGENT_GAME_CMD"),
 		GameArgs:        strings.Fields(os.Getenv("WKAGENT_GAME_ARGS")),
+		Launch: wkagent.LaunchConfig{
+			// The initial selection only applies to an install that has
+			// never been told otherwise — the persisted choice wins, so
+			// redeploying the container doesn't silently change which build
+			// the server runs.
+			Profile:      envOr("WKAGENT_LAUNCH_PROFILE", wkagent.ProfileNative),
+			WineBin:      os.Getenv("WKAGENT_WINE_BIN"),
+			WinePrefix:   os.Getenv("WKAGENT_WINE_PREFIX"),
+			GameExe:      os.Getenv("WKAGENT_GAME_EXE"),
+			NativeScript: os.Getenv("WKAGENT_NATIVE_SCRIPT"),
+		},
 		GamePort:        gamePort,
 		StopGrace:       stopGrace,
 		AdminPassword:   os.Getenv("WKAGENT_ADMIN_PASSWORD"),

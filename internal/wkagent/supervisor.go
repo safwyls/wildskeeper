@@ -53,9 +53,17 @@ type GameStatus struct {
 }
 
 type supervisor struct {
-	installDir    string
-	command       string
-	args          []string
+	installDir string
+	// profile is how the game is launched — which build, with what
+	// environment, writing its config where. Guarded by mu because the
+	// console can change it between starts.
+	profile Profile
+	// launch is the environment-supplied tuning a profile is rebuilt from
+	// when the selection changes.
+	launch        LaunchConfig
+	gamePort      int
+	gameCommand   string
+	gameArgs      []string
 	adminPassword string
 	serverName    string
 	// ownerID is the Player ID the game treats as Owner. Without it the
@@ -80,7 +88,11 @@ type supervisor struct {
 	stopping  bool
 	desired   string // running | stopped, persisted
 	restarts  int
-	failures  int // consecutive unclean exits, for backoff
+	// runningProfile is the profile the live process was started with, so a
+	// selection made while the game is up can be reported as pending rather
+	// than pretended to be in effect.
+	runningProfile string
+	failures       int // consecutive unclean exits, for backoff
 	lastExit  *exitInfo
 	log       []string
 }
@@ -95,15 +107,6 @@ func newSupervisor(cfg Config, jobsBusy func() bool) *supervisor {
 	if port <= 0 {
 		port = DefaultGamePort
 	}
-	args := cfg.GameArgs
-	if len(args) == 0 {
-		// -log is load-bearing, not cosmetic: it puts the game's log on
-		// stdout, which is the stream the ring buffer captures and the
-		// only source the player list is derived from. The port is passed
-		// on the command line because the ini has no key for it
-		// (docs/dragonwilds-recon.md, "Config").
-		args = []string{"-log", fmt.Sprintf("-Port=%d", port)}
-	}
 	grace := cfg.StopGrace
 	if grace <= 0 {
 		grace = 30 * time.Second
@@ -112,14 +115,12 @@ func newSupervisor(cfg Config, jobsBusy func() bool) *supervisor {
 	if backoff <= 0 {
 		backoff = 5 * time.Second
 	}
-	command := cfg.GameCommand
-	if command == "" {
-		command = "./RSDragonwildsServer.sh"
-	}
-	return &supervisor{
+	s := &supervisor{
 		installDir:    cfg.InstallDir,
-		command:       command,
-		args:          args,
+		launch:        cfg.Launch,
+		gamePort:      port,
+		gameCommand:   cfg.GameCommand,
+		gameArgs:      cfg.GameArgs,
 		adminPassword: cfg.AdminPassword,
 		serverName:    cfg.ServerName,
 		ownerID:       cfg.OwnerID,
@@ -131,6 +132,66 @@ func newSupervisor(cfg Config, jobsBusy func() bool) *supervisor {
 		state:         "stopped",
 		desired:       "stopped",
 	}
+	// The selection persists in the install volume for the same reason
+	// desired-state does: an agent container recreated mid-flight must come
+	// back running the build the operator chose, not the default.
+	s.profile = s.buildProfile(s.loadProfileName(cfg.Launch.Profile))
+	return s
+}
+
+// buildProfile assembles the named profile from this supervisor's config.
+func (s *supervisor) buildProfile(name string) Profile {
+	return buildProfile(name, s.launch, s.installDir, s.gamePort, s.gameCommand, s.gameArgs)
+}
+
+// profileNamePath is where the launch selection survives agent recreation.
+func (s *supervisor) profileNamePath() string {
+	return filepath.Join(s.installDir, ".wkagent", "profile")
+}
+
+func (s *supervisor) loadProfileName(fallback string) string {
+	if data, err := os.ReadFile(s.profileNamePath()); err == nil {
+		if v := strings.TrimSpace(string(data)); validProfile(v) {
+			return v
+		}
+	}
+	return fallback
+}
+
+// SetProfile changes which build the next start launches. It deliberately
+// does not restart anything: switching build is a heavier act than a
+// restart (the two are installed from different depots), so the decision to
+// bring the game down belongs to whoever asked.
+func (s *supervisor) SetProfile(name string) (Profile, error) {
+	if !validProfile(name) {
+		return Profile{}, fmt.Errorf("unknown launch profile %q", name)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.profile.Name == ProfileCustom {
+		return s.profile, errors.New("this agent is configured with an explicit game command; unset WKAGENT_GAME_CMD to choose a profile")
+	}
+	s.profile = s.buildProfile(name)
+	if err := os.MkdirAll(filepath.Dir(s.profileNamePath()), 0o755); err == nil {
+		_ = os.WriteFile(s.profileNamePath(), []byte(name+"\n"), 0o644)
+	}
+	s.logger.Info("launch profile selected", "profile", name, "appliesAt", "next start")
+	return s.profile, nil
+}
+
+// profileChangedSinceStart reports whether the running game is a different
+// build from the one now selected.
+func (s *supervisor) profileChangedSinceStart() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.state == "running" && s.runningProfile != "" && s.runningProfile != s.profile.Name
+}
+
+// Profile is the active launch profile.
+func (s *supervisor) Profile() Profile {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.profile
 }
 
 // desiredPath is where the operator's intent survives agent recreation.
@@ -156,10 +217,19 @@ func (s *supervisor) persistDesired(v string) {
 	}
 }
 
-// Installed reports whether the game files exist yet.
+// Installed reports whether the *selected build's* files exist yet. The two
+// builds come from different depots, so a native install is not a Wine
+// install however full the directory looks.
 func (s *supervisor) Installed() bool {
-	_, err := os.Stat(filepath.Join(s.installDir, s.command))
-	return err == nil
+	s.mu.Lock()
+	p := s.profile
+	s.mu.Unlock()
+	return p.installed(s.installDir)
+}
+
+// installedLocked is Installed for callers already holding mu.
+func (s *supervisor) installedLocked() bool {
+	return s.profile.installed(s.installDir)
 }
 
 // Running reports whether the game process is currently alive.
@@ -186,13 +256,16 @@ func (s *supervisor) startLocked() error {
 	if s.jobsBusy != nil && s.jobsBusy() {
 		return errJobInFlight
 	}
-	if !s.Installed() {
-		return fmt.Errorf("game is not installed under %s — run an update first", s.installDir)
+	if !s.installedLocked() {
+		return fmt.Errorf("the %s build is not installed under %s — run an update first", s.profile.Name, s.installDir)
 	}
 	s.prepareRuntime()
 
-	cmd := exec.Command(filepath.Join(s.installDir, s.command), s.args...)
-	cmd.Dir = s.installDir
+	cmd := exec.Command(s.profile.resolveCommand(s.installDir), s.profile.Args...)
+	cmd.Dir = filepath.Join(s.installDir, s.profile.Dir)
+	if len(s.profile.Env) > 0 {
+		cmd.Env = append(os.Environ(), s.profile.Env...)
+	}
 	setProcessGroup(cmd)
 	stdout, err := cmd.StdoutPipe()
 	if err == nil {
@@ -206,9 +279,10 @@ func (s *supervisor) startLocked() error {
 	s.cmd = cmd
 	s.done = make(chan struct{})
 	s.state = "running"
+	s.runningProfile = s.profile.Name
 	s.startedAt = time.Now().UTC()
 	s.persistDesired("running")
-	s.logger.Info("game started", "pid", cmd.Process.Pid)
+	s.logger.Info("game started", "pid", cmd.Process.Pid, "profile", s.profile.Name)
 
 	go s.wait(cmd, stdout, s.done)
 	return nil
@@ -403,10 +477,6 @@ func (s *supervisor) Logs(tail int) []string {
 	return append([]string(nil), s.log[len(s.log)-tail:]...)
 }
 
-// iniRelPath is where the game keeps its settings, relative to the install
-// dir. Linux-only: this agent supervises the native Linux server build.
-var iniRelPath = filepath.Join("RSDragonwilds", "Saved", "Config", "LinuxServer", "DedicatedServer.ini")
-
 // prepareRuntime makes a freshly installed server bootable, then keeps the
 // operator's identity settings authoritative.
 //
@@ -424,7 +494,10 @@ var iniRelPath = filepath.Join("RSDragonwilds", "Saved", "Config", "LinuxServer"
 // game's), and only the explicitly configured identity keys are enforced
 // into it on each start, under dwconfig's never-add policy.
 func (s *supervisor) prepareRuntime() {
-	ini := filepath.Join(s.installDir, iniRelPath)
+	// Per profile: UE names the config directory after the platform, so the
+	// Windows build under Wine reads WindowsServer/ and never sees anything
+	// written to LinuxServer/.
+	ini := filepath.Join(s.installDir, s.profile.ConfigRel)
 	if _, err := os.Stat(ini); err != nil {
 		s.seedConfig(ini)
 	} else {
