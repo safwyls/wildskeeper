@@ -3,10 +3,11 @@ import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Gamepad2, LogOut, MoreVertical, Pencil, Plus, Power, RefreshCw, Save, Trash2 } from "lucide-react";
 import { toast } from "sonner";
-import { api, errorDetail, type Feature, type Server } from "../lib/api";
+import { api, errorDetail, type Server } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { serverColor, initials } from "../lib/palette";
-import { canSeeFeature } from "../lib/visibility";
+import { FEATURE_ROUTES, featureLabel } from "../lib/games";
+import { canSeeFeature, serverFeatures } from "../lib/visibility";
 import { cn, copyText, joinAddressFor } from "../lib/utils";
 import { WkServerRune } from "./wildskeeper/WkServerRune";
 import { ServerFormDialog } from "./ServerFormDialog";
@@ -22,20 +23,6 @@ const segmentClass = ({ isActive }: { isActive: boolean }) =>
     "shrink-0 whitespace-nowrap rounded-lg px-3 py-1.5 text-center text-sm font-semibold transition",
     isActive ? "bg-wk-ember text-wk-parchment" : "text-wk-parchment/60",
   );
-
-/** The switchable views, in pill order. Labels are shortened for the scroller;
- * the route segment differs from the feature key for pals, whose page has
- * always lived at /players. */
-const SAVE_VIEWS: { feature: Feature; path: string; label: string }[] = [
-  { feature: "map", path: "map", label: "Live map" },
-  { feature: "pals", path: "players", label: "Pals" },
-  { feature: "inventory", path: "inventory", label: "Inventory" },
-  { feature: "storage", path: "storage", label: "Storage" },
-  { feature: "paldex", path: "paldex", label: "Paldex" },
-  { feature: "achievements", path: "achievements", label: "Achievements" },
-  { feature: "guilds", path: "guilds", label: "Guilds" },
-  { feature: "calculators", path: "calculators", label: "Calculators" },
-];
 
 /** Mobile top bar: active server identity, Dashboard/Live map segmented control,
  * and an overflow menu carrying the actions that have no other mobile home. */
@@ -226,10 +213,12 @@ export function MobileTopBar({ server }: { server: Server | null }) {
           <NavLink to={`/servers/${server.id}`} end className={segmentClass}>
             Dashboard
           </NavLink>
-          {SAVE_VIEWS.map(({ feature, path, label }) =>
+          {/* Same source of truth as the desktop sidebar: the server's own
+              feature list, in nav order, named per game. */}
+          {serverFeatures(server).map((feature) =>
             canSeeFeature(server, feature, isAdmin) ? (
-              <NavLink key={feature} to={`/servers/${server.id}/${path}`} className={segmentClass}>
-                {label}
+              <NavLink key={feature} to={`/servers/${server.id}/${FEATURE_ROUTES[feature]}`} className={segmentClass}>
+                {featureLabel(server, feature)}
               </NavLink>
             ) : null,
           )}
