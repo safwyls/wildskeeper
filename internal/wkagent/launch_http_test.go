@@ -219,3 +219,64 @@ func TestWineProfileLaunchesThroughPathWithTheModEnvironment(t *testing.T) {
 		t.Errorf("the mod would not find the bridge directory: %s", got)
 	}
 }
+
+// Switching build must not cost the operator their settings or their world.
+// The two are different: the world is shared by both builds (saves live in
+// Saved/SaveGames, which is not platform-suffixed), but the config
+// directory *is* per platform, so the settings have to be carried across
+// deliberately.
+func TestSwitchingBuildCarriesSettingsAndLeavesTheWorldAlone(t *testing.T) {
+	srv, _, install := newSupervisorAgent(t, steadyGame)
+
+	linuxIni := filepath.Join(install, "RSDragonwilds", "Saved", "Config", "LinuxServer", "DedicatedServer.ini")
+	if err := os.MkdirAll(filepath.Dir(linuxIni), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	settings := "[/Script/Dominion.DedicatedServerSettings]\nServerName=Ashenfall\nOwnerId=abc\n"
+	if err := os.WriteFile(linuxIni, []byte(settings), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A world, to prove it is untouched by the switch.
+	save := filepath.Join(install, "RSDragonwilds", "Saved", "SaveGames", "Ashenfall.sav")
+	if err := os.MkdirAll(filepath.Dir(save), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(save, []byte("SAVE-world-bytes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	authed(t, http.MethodPut, srv.URL+"/v1/launch", map[string]string{"profile": wkagent.ProfileWine})
+
+	windowsIni := filepath.Join(install, "RSDragonwilds", "Saved", "Config", "WindowsServer", "DedicatedServer.ini")
+	got, err := os.ReadFile(windowsIni)
+	if err != nil {
+		t.Fatalf("settings were not carried to the Windows build: %v", err)
+	}
+	if string(got) != settings {
+		t.Errorf("carried settings = %q, want them intact", got)
+	}
+	// Saves are shared, so switching must not have touched the world.
+	if world, err := os.ReadFile(save); err != nil || string(world) != "SAVE-world-bytes" {
+		t.Errorf("the world changed across a build switch: %v %q", err, world)
+	}
+
+	// And the settings editor now serves the file the game will actually
+	// read — otherwise edits would appear to save and change nothing.
+	resp, body := authed(t, http.MethodGet, srv.URL+"/v1/files/config", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("config after switch: %d %s", resp.StatusCode, body)
+	}
+	if !strings.Contains(string(body), "Ashenfall") {
+		t.Errorf("the config verb served something unexpected: %s", body)
+	}
+
+	// Switching back must not clobber the config that is already there.
+	if err := os.WriteFile(windowsIni, []byte(settings+"Edited=1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	authed(t, http.MethodPut, srv.URL+"/v1/launch", map[string]string{"profile": wkagent.ProfileNative})
+	authed(t, http.MethodPut, srv.URL+"/v1/launch", map[string]string{"profile": wkagent.ProfileWine})
+	if back, _ := os.ReadFile(windowsIni); !strings.Contains(string(back), "Edited=1") {
+		t.Error("switching back overwrote a config that was already there")
+	}
+}

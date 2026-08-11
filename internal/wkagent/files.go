@@ -21,7 +21,11 @@ import (
 // DedicatedServer.ini. No client-supplied paths, ever — same stance as
 // the steam verbs.
 
-// configRelPath is where the dedicated server keeps its settings.
+// configRelPath is where the *native Linux* dedicated server keeps its
+// settings. UE names the config directory after the platform, so the
+// Windows build under Wine uses WindowsServer/ instead — supervisor mode
+// resolves the path from the active launch profile rather than this
+// constant. See Agent.configPath.
 const configRelPath = "RSDragonwilds/Saved/Config/LinuxServer/DedicatedServer.ini"
 
 // maxConfigBytes caps a config upload; a real DedicatedServer.ini is a
@@ -153,6 +157,14 @@ func (a *Agent) handleGetSave(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *Agent) configPath() string {
+	// Follow the launch profile wherever this agent runs the game. Serving
+	// LinuxServer/ to a console whose server is on the Wine profile would
+	// hand the settings editor a file the game never reads — edits would
+	// appear to save and change nothing, which is worse than an error.
+	// Companion mode launches nothing, so the Linux default stands.
+	if a.game != nil {
+		return filepath.Join(a.cfg.InstallDir, a.game.Profile().ConfigRel)
+	}
 	return filepath.Join(a.cfg.InstallDir, filepath.FromSlash(configRelPath))
 }
 

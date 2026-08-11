@@ -214,6 +214,22 @@ What's left in Phase 4, in the order worth attempting:
    `Dockerfile.wkagent-wine` — Wine adds >1 GB and most servers will never
    want it, so the plain image stays small.
 
+   **Switching is safe for the world, and carries the settings.** Saves
+   live in `Saved/SaveGames/`, which is *not* platform-suffixed, so both
+   builds read and write the same world — switching costs nothing there.
+   Config is a different story: it *is* per platform, so selecting a
+   profile copies `DedicatedServer.ini` across to the new build's
+   directory when that side has none, and the agent's config verbs follow
+   the active profile. Without both, a switch would silently revert every
+   edited setting and then let the dashboard keep editing a file the game
+   no longer reads.
+
+   **Deploying it.** The provisioner needs no change — it doesn't run
+   games. The per-server agent container is what needs Wine, via the
+   `latest-wine` image tag (Deployment details in the Raise-a-server
+   wizard, or recreate an existing agent with that tag). CI publishes it
+   from `Dockerfile.wkagent-wine`; the plain `latest` stays Wine-free.
+
    **What is proven and what is not.** A stub `wine` on PATH proves the
    whole launch path — PATH resolution, the exe, the port, the env, the
    working directory — reaches the process

@@ -171,7 +171,9 @@ func (s *supervisor) SetProfile(name string) (Profile, error) {
 	if s.profile.Name == ProfileCustom {
 		return s.profile, errors.New("this agent is configured with an explicit game command; unset WKAGENT_GAME_CMD to choose a profile")
 	}
+	previous := s.profile
 	s.profile = s.buildProfile(name)
+	s.carryConfig(previous, s.profile)
 	if err := os.MkdirAll(filepath.Dir(s.profileNamePath()), 0o755); err == nil {
 		_ = os.WriteFile(s.profileNamePath(), []byte(name+"\n"), 0o644)
 	}
@@ -185,6 +187,42 @@ func (s *supervisor) profileChangedSinceStart() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.state == "running" && s.runningProfile != "" && s.runningProfile != s.profile.Name
+}
+
+// carryConfig copies DedicatedServer.ini across when the build changes.
+//
+// UE keeps a separate config directory per platform, so without this a
+// switch would silently revert every setting the operator ever edited —
+// server name, admin password, world name, everything the dashboard writes
+// — back to whatever gets seeded on the other side. The world itself is
+// unaffected either way: saves live in Saved/SaveGames, which is not
+// platform-suffixed and is shared by both builds.
+//
+// Only ever a copy into an empty destination. A config already sitting on
+// the far side belongs to whoever put it there — likely this operator, from
+// an earlier stint on that build — and overwriting it would be the same
+// data loss in the other direction.
+func (s *supervisor) carryConfig(from, to Profile) {
+	if from.ConfigRel == to.ConfigRel {
+		return
+	}
+	dst := filepath.Join(s.installDir, to.ConfigRel)
+	if _, err := os.Stat(dst); err == nil {
+		return
+	}
+	data, err := os.ReadFile(filepath.Join(s.installDir, from.ConfigRel))
+	if err != nil {
+		return // nothing to carry: a fresh install seeds its own on start
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		s.logger.Warn("could not carry settings to the new build", "error", err)
+		return
+	}
+	if err := os.WriteFile(dst, data, 0o644); err != nil {
+		s.logger.Warn("could not carry settings to the new build", "error", err)
+		return
+	}
+	s.logger.Info("carried settings to the new build", "from", from.ConfigRel, "to", to.ConfigRel)
 }
 
 // Profile is the active launch profile.

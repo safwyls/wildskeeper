@@ -51,9 +51,14 @@ jobs:
       - name: Go tests
         run: go test ./...
 
-  # Two images from one repo: the dashboard (Dockerfile) and the wkagent
-  # sidecar (Dockerfile.wkagent, docs/sidecar-agent.md). Same tag scheme
-  # for both so a compose stack can pin one channel across the pair.
+  # Three images from one repo: the dashboard (Dockerfile), the wkagent
+  # sidecar (Dockerfile.wkagent, docs/sidecar-agent.md), and the same agent
+  # with Wine for the modded launch profile. The first two share a tag
+  # scheme so a compose stack can pin one channel across the pair; the Wine
+  # build is a *variant* of the agent, so it carries a suffix instead —
+  # ghcr.io/safwyls/wkagent:wine — and must never take plain :latest, which
+  # would silently swap a 200 MB agent for a 1.5 GB one under every
+  # deployment that never asked for mods.
   docker:
     needs: verify
     runs-on: ubuntu-latest
@@ -67,6 +72,9 @@ jobs:
             dockerfile: Dockerfile
           - image: wkagent
             dockerfile: Dockerfile.wkagent
+          - image: wkagent
+            dockerfile: Dockerfile.wkagent-wine
+            suffix: wine
     steps:
       - uses: actions/checkout@v5
 
@@ -83,6 +91,10 @@ jobs:
         uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }}
+          # flavor suffixes every tag for a variant build, so the Wine agent
+          # publishes :wine, :wine-1.2.3, :main-wine and never bare :latest.
+          flavor: |
+            suffix=${{ matrix.suffix && format('-{0}', matrix.suffix) || '' }},onlatest=true
           tags: |
             type=ref,event=branch
             type=semver,pattern={{version}}
@@ -100,5 +112,5 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           # Separate cache scopes — the two images share go module layers
           # conceptually but must not overwrite each other's buildx cache.
-          cache-from: type=gha,scope=${{ matrix.image }}
-          cache-to: type=gha,mode=min,scope=${{ matrix.image }}
+          cache-from: type=gha,scope=${{ matrix.image }}${{ matrix.suffix }}
+          cache-to: type=gha,mode=min,scope=${{ matrix.image }}${{ matrix.suffix }}
