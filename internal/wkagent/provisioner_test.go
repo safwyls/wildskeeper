@@ -285,3 +285,113 @@ func TestNonProvisionerRefusesProvision(t *testing.T) {
 		t.Errorf("companion provision: %d, want 400", resp.StatusCode)
 	}
 }
+
+// The whole point of the contract: a console for a *different* game can
+// place its server here, and this provisioner — which only knows
+// Dragonwilds — carries it without understanding a single field.
+//
+// The spec below is Palworld-shaped on purpose: four distinct ports
+// including RCON and REST, a server description, no owner id. If this
+// provisioner had to know what any of that meant, the boundary would be
+// fake and the extraction into a host service would not work.
+func TestProvisionSpecPlacesAnotherGamesServer(t *testing.T) {
+	srv, fake, dataRoot := newProvisioner(t)
+
+	spec := map[string]any{
+		"name":  "palagent-palhalla",
+		"slug":  "palhalla",
+		"image": "ghcr.io/safwyls/palagent:latest",
+		"user":  "568:568",
+		"env": map[string]string{
+			"PALAGENT_MODE":        "supervisor",
+			"PALAGENT_SERVER_DESC": "a description this provisioner never parses",
+		},
+		"ports": []map[string]any{
+			{"host": 8211, "container": 8211, "proto": "udp"},
+			{"host": 8212, "container": 8212, "proto": "tcp"},
+			{"host": 25575, "container": 25575, "proto": "tcp"},
+			{"host": 8811, "container": 8811, "proto": "tcp"},
+		},
+		"dataMount": "/palworld",
+	}
+	resp, m := do(t, srv, "POST", "/v1/provision/spec", testToken, spec)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("placing another game's server: %d %v", resp.StatusCode, m)
+	}
+
+	// The data directory is the provisioner's decision, not the caller's.
+	if _, err := os.Stat(filepath.Join(dataRoot, "palhalla")); err != nil {
+		t.Errorf("data dir was not created under the data root: %v", err)
+	}
+
+	created := fake.create
+	if created["Image"] != "ghcr.io/safwyls/palagent:latest" {
+		t.Errorf("image = %v", created["Image"])
+	}
+	env := fmt.Sprint(created["Env"])
+	if !strings.Contains(env, "PALAGENT_SERVER_DESC=") {
+		t.Errorf("the console's own env did not survive: %v", env)
+	}
+	// Ownership labels are the provisioner's, always — they are what every
+	// later destroy and recreate checks.
+	labels, _ := created["Labels"].(map[string]any)
+	if labels["wildskeeper.provisioned"] != "true" || labels["wildskeeper.slug"] != "palhalla" {
+		t.Errorf("ownership labels missing or wrong: %v", labels)
+	}
+	host, _ := created["HostConfig"].(map[string]any)
+	binds := fmt.Sprint(host["Binds"])
+	if !strings.Contains(binds, ":/palworld") {
+		t.Errorf("the data mount the caller asked for was not used: %v", binds)
+	}
+}
+
+// A caller must not be able to turn the provisioner into a way to run
+// anything it likes on the host. This is the property that makes a generic
+// spec endpoint safe enough to exist.
+func TestProvisionSpecRefusesImagesOutsideTheAllowlist(t *testing.T) {
+	srv, fake, _ := newProvisioner(t)
+
+	resp, m := do(t, srv, "POST", "/v1/provision/spec", testToken, map[string]any{
+		"name": "evil", "slug": "evil", "image": "docker.io/library/alpine:latest",
+	})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 for an image outside the allowlist: %v", resp.StatusCode, m)
+	}
+	if !strings.Contains(fmt.Sprint(m["error"]), "allowlist") {
+		t.Errorf("the refusal should say why: %v", m)
+	}
+	if fake.create != nil {
+		t.Error("a refused image still reached docker create")
+	}
+}
+
+// The slug becomes a directory under the data root, so it must never be
+// able to climb out of it.
+func TestProvisionSpecRefusesSlugTraversal(t *testing.T) {
+	srv, _, _ := newProvisioner(t)
+	for _, slug := range []string{"../etc", "a/b", "/abs", ".."} {
+		resp, _ := do(t, srv, "POST", "/v1/provision/spec", testToken, map[string]any{
+			"name": "x", "slug": slug, "image": "ghcr.io/safwyls/wkagent:latest",
+		})
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("slug %q: status = %d, want 400", slug, resp.StatusCode)
+		}
+	}
+}
+
+// A caller must not be able to forge the labels the ownership gates read.
+func TestProvisionSpecCannotForgeOwnershipLabels(t *testing.T) {
+	srv, fake, _ := newProvisioner(t)
+
+	do(t, srv, "POST", "/v1/provision/spec", testToken, map[string]any{
+		"name": "wkagent-x", "slug": "x", "image": "ghcr.io/safwyls/wkagent:latest",
+		"labels": map[string]string{"wildskeeper.slug": "someone-elses", "mine": "ok"},
+	})
+	labels, _ := fake.create["Labels"].(map[string]any)
+	if labels["wildskeeper.slug"] != "x" {
+		t.Errorf("a caller overwrote an ownership label: %v", labels)
+	}
+	if labels["mine"] != "ok" {
+		t.Errorf("the caller's own labels should still be kept: %v", labels)
+	}
+}

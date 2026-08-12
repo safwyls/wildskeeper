@@ -1,6 +1,7 @@
 package wkagent
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -129,73 +131,47 @@ func (a *Agent) handleProvision(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// The data directory is always DataRoot/<slug> — the slug pattern
-	// forbids traversal, and nothing else about the location is
-	// caller-controlled.
-	dataDir := filepath.Join(a.cfg.DataRoot, req.Slug)
-	if err := os.MkdirAll(dataDir, 0o755); err != nil {
-		writeError(w, http.StatusInternalServerError, "creating data dir: "+err.Error())
-		return
-	}
-	if req.RunAs != "" {
-		parts := strings.SplitN(req.RunAs, ":", 2)
-		uid, _ := strconv.Atoi(parts[0])
-		gid, _ := strconv.Atoi(parts[1])
-		if err := os.Chown(dataDir, uid, gid); err != nil {
-			// Non-fatal only if the dir is already writable by the user;
-			// SteamCMD will tell on it loudly otherwise.
-			a.cfg.Logger.Warn("could not chown data dir", "dir", dataDir, "error", err)
-		}
-	}
-
-	image := "ghcr.io/safwyls/wkagent:" + req.ImageTag
-	if err := a.docker.ImagePull(r.Context(), image); err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
-		return
-	}
-
-	env := []string{
-		"HOME=/tmp",
-		"WKAGENT_MODE=supervisor",
-		"WKAGENT_TOKEN=" + req.Token,
-		"WKAGENT_ADMIN_PASSWORD=" + req.AdminPassword,
-		"WKAGENT_OWNER_ID=" + strings.TrimSpace(req.OwnerID),
+	// From here the work is game-agnostic: everything specific to
+	// Dragonwilds has been turned into env, ports and an image, which is
+	// exactly the boundary a host provisioner should sit on. The same
+	// routine serves a spec posted directly by any console.
+	env := map[string]string{
+		"HOME":                  "/tmp",
+		"WKAGENT_MODE":          "supervisor",
+		"WKAGENT_TOKEN":         req.Token,
+		"WKAGENT_ADMIN_PASSWORD": req.AdminPassword,
+		"WKAGENT_OWNER_ID":      strings.TrimSpace(req.OwnerID),
 	}
 	if req.ServerName != "" {
-		env = append(env, "WKAGENT_SERVER_NAME="+req.ServerName)
+		env["WKAGENT_SERVER_NAME"] = req.ServerName
 	}
 	if req.WorldName != "" {
-		env = append(env, "WKAGENT_WORLD_NAME="+req.WorldName)
+		env["WKAGENT_WORLD_NAME"] = req.WorldName
 	}
-	id, err := a.docker.ContainerCreate(r.Context(), dockerctl.ContainerSpec{
+	spec := ProvisionSpec{
 		Name:  name,
-		Image: image,
+		Slug:  req.Slug,
+		Image: "ghcr.io/safwyls/wkagent:" + req.ImageTag,
 		User:  req.RunAs,
 		Env:   env,
-		Binds: []string{dataDir + ":/dragonwilds"},
 		// The container-side ports are fixed; only the host side varies.
 		// The game has no RCON or REST interface to publish — everything
 		// the dashboard reads comes through the agent's own port.
-		Ports: map[int]string{
-			req.GamePort:     fmt.Sprintf("%d/udp", defaultContainerGamePort),
-			req.GamePort + 1: fmt.Sprintf("%d/udp", defaultContainerGamePort+1),
-			req.AgentPort:    "8811/tcp",
+		Ports: []PortMap{
+			{Host: req.GamePort, Container: defaultContainerGamePort, Proto: "udp"},
+			{Host: req.GamePort + 1, Container: defaultContainerGamePort + 1, Proto: "udp"},
+			{Host: req.AgentPort, Container: 8811, Proto: "tcp"},
 		},
-		Labels:               map[string]string{"wildskeeper.provisioned": "true", "wildskeeper.slug": req.Slug},
-		RestartUnlessStopped: true,
-	})
-	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
-		return
+		DataMount: "/dragonwilds",
 	}
-	if err := a.docker.Start(r.Context(), name); err != nil {
-		writeError(w, http.StatusBadGateway, "created but failed to start: "+err.Error())
+	dataDir, image, err := a.place(r.Context(), spec)
+	if err != nil {
+		writePlaceError(w, err)
 		return
 	}
 	a.cfg.Logger.Info("provisioned server", "container", name, "dataDir", dataDir, "image", image)
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"container": name,
-		"id":        id,
 		"dataDir":   dataDir,
 	})
 }
@@ -558,4 +534,141 @@ func (a *Agent) handleRecreate(w http.ResponseWriter, r *http.Request) {
 	}
 	a.cfg.Logger.Info("recreated server agent", "container", req.Container, "from", previous, "to", image)
 	writeJSON(w, http.StatusOK, RecreateResult{Container: req.Container, Image: image, Previous: previous})
+}
+
+// placeError carries the status a failed placement should answer with, so
+// the shared routine can be used by handlers that must report precisely
+// which step failed rather than collapsing everything to 502.
+type placeError struct {
+	status int
+	err    error
+}
+
+func (e *placeError) Error() string { return e.err.Error() }
+
+func writePlaceError(w http.ResponseWriter, err error) {
+	var pe *placeError
+	if errors.As(err, &pe) {
+		writeError(w, pe.status, pe.err.Error())
+		return
+	}
+	writeError(w, http.StatusBadGateway, err.Error())
+}
+
+// place creates and starts one container from a spec, and is the single
+// path every provision takes — the game-shaped handler builds a spec and
+// comes through here, exactly as a spec posted by any other console would.
+// Having one implementation is the point: a second path would be a second
+// set of ownership labels, chown rules and failure semantics to keep in
+// step.
+//
+// It returns the data directory and the image actually used.
+func (a *Agent) place(ctx context.Context, spec ProvisionSpec) (string, string, error) {
+	if err := spec.Validate(a.cfg.AllowedImagePrefixes); err != nil {
+		return "", "", &placeError{http.StatusBadRequest, err}
+	}
+
+	// The data directory is always DataRoot/<slug> — the slug pattern
+	// forbids traversal, and nothing else about the location is
+	// caller-controlled.
+	dataDir := filepath.Join(a.cfg.DataRoot, spec.Slug)
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		return "", "", &placeError{http.StatusInternalServerError, fmt.Errorf("creating data dir: %w", err)}
+	}
+	if spec.User != "" {
+		parts := strings.SplitN(spec.User, ":", 2)
+		uid, _ := strconv.Atoi(parts[0])
+		gid := uid
+		if len(parts) == 2 {
+			gid, _ = strconv.Atoi(parts[1])
+		}
+		if err := os.Chown(dataDir, uid, gid); err != nil {
+			// Non-fatal only if the dir is already writable by the user;
+			// SteamCMD will tell on it loudly otherwise.
+			a.cfg.Logger.Warn("could not chown data dir", "dir", dataDir, "error", err)
+		}
+	}
+
+	if err := a.docker.ImagePull(ctx, spec.Image); err != nil {
+		return "", "", &placeError{http.StatusBadGateway, err}
+	}
+
+	env := make([]string, 0, len(spec.Env))
+	for k, v := range spec.Env {
+		env = append(env, k+"="+v)
+	}
+	sort.Strings(env) // stable ordering, so a recreate diffs cleanly
+	ports := map[int]string{}
+	for _, p := range spec.Ports {
+		proto := p.Proto
+		if proto == "" {
+			proto = "tcp"
+		}
+		ports[p.Host] = fmt.Sprintf("%d/%s", p.Container, proto)
+	}
+	mount := spec.DataMount
+	if mount == "" {
+		mount = "/data"
+	}
+	// Ownership labels are applied last so a caller cannot overwrite them:
+	// they are what every later destroy and recreate checks before touching
+	// anything, and a forged one would let a console claim a container this
+	// provisioner never made.
+	labels := map[string]string{}
+	for k, v := range spec.Labels {
+		labels[k] = v
+	}
+	labels["wildskeeper.provisioned"] = "true"
+	labels["wildskeeper.slug"] = spec.Slug
+
+	if _, err := a.docker.ContainerCreate(ctx, dockerctl.ContainerSpec{
+		Name:                 spec.Name,
+		Image:                spec.Image,
+		User:                 spec.User,
+		Env:                  env,
+		Binds:                []string{dataDir + ":" + mount},
+		Ports:                ports,
+		Labels:               labels,
+		RestartUnlessStopped: true,
+	}); err != nil {
+		return "", "", &placeError{http.StatusBadGateway, err}
+	}
+	if err := a.docker.Start(ctx, spec.Name); err != nil {
+		return "", "", &placeError{http.StatusBadGateway, fmt.Errorf("created but failed to start: %w", err)}
+	}
+	return dataDir, spec.Image, nil
+}
+
+// handleProvisionSpec places a container from a game-agnostic spec.
+//
+// This is the contract a second console speaks: it sends what its game
+// needs as data, and this provisioner places it without knowing what any of
+// it means. The game-shaped /v1/provision above is now just one caller of
+// the same routine — which is the evidence that the boundary is real rather
+// than aspirational.
+func (a *Agent) handleProvisionSpec(w http.ResponseWriter, r *http.Request) {
+	if a.cfg.Mode != "provisioner" {
+		writeError(w, http.StatusBadRequest, "agent is not a provisioner")
+		return
+	}
+	var spec ProvisionSpec
+	if err := json.NewDecoder(r.Body).Decode(&spec); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if containers, err := a.docker.ContainerList(r.Context()); err == nil {
+		for _, c := range containers {
+			if c.Name == spec.Name {
+				writeError(w, http.StatusConflict, "a container named "+spec.Name+" already exists on this host")
+				return
+			}
+		}
+	}
+	dataDir, image, err := a.place(r.Context(), spec)
+	if err != nil {
+		writePlaceError(w, err)
+		return
+	}
+	a.cfg.Logger.Info("provisioned from spec", "container", spec.Name, "dataDir", dataDir, "image", image)
+	writeJSON(w, http.StatusCreated, map[string]any{"container": spec.Name, "dataDir": dataDir, "image": image})
 }

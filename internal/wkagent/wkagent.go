@@ -132,6 +132,11 @@ type Config struct {
 	PublicHost      string
 	DefaultRunAs    string
 	DefaultImageTag string
+	// AllowedImagePrefixes bounds what this host can be told to run. Empty
+	// means DefaultImagePrefixes. Provisioner mode only — and the single
+	// thing standing between a generic spec endpoint and an arbitrary
+	// container-execution primitive.
+	AllowedImagePrefixes []string
 	// Version is the agent build version, reported in /v1/health.
 	Version string
 	Logger  *slog.Logger
@@ -271,6 +276,9 @@ func (a *Agent) Handler() http.Handler {
 		// discovery, and adoption (secret recovery for wkagent
 		// containers the control plane lost track of).
 		r.Post("/provision", a.handleProvision)
+		// The game-agnostic contract: any console sends what its game
+		// needs as data and this places it. See spec.go.
+		r.Post("/provision/spec", a.handleProvisionSpec)
 		// Rebuild a provisioned agent on a different image — the only
 		// non-manual way to move one to the Wine channel, since nothing
 		// else on the host manages these containers.

@@ -127,3 +127,74 @@ Everything here was motivated by a real friction on 2026-08-10:
   the derivations are now verified. Don't add speculative protocol code.
 - **The console holding docker create rights.** The provisioner split is
   the security model, not an inconvenience.
+
+## Extracting the host provisioner (decided 2026-08-11)
+
+Measured against palcon at `82aee47`, with naming normalised away, the two
+agents' `provisioner.go` differ by **zero structural lines**. Every
+difference is data: which fields the request carries (`ServerDesc`,
+`RESTPort`, `RCONPort` vs `OwnerID`, `WorldName`), which env vars they
+become, and the port-shape rule (Palworld's four distinct ports vs
+Dragonwilds' pair plus agent). Container creation, ownership labels, data
+directories, discovery and destroy are identical.
+
+Divergence across the other shared packages, same method:
+
+| package | lines | differing |
+|---|---|---|
+| `crypto`, `db`, `savecache` | 637 | 0% |
+| `store` | 2213 | 1% |
+| `agentfiles` | 161 | 4% |
+| `sched` | 995 | 8% |
+| `dockerctl`, `agentctl`, `notify` | 2555 | 13–14% |
+| `backup` | 1012 | 19% |
+| `steamcmd` | 98 | 27% |
+
+So the plan is: one **host provisioner** service (its own repo, its own
+image, one per host), and a **shared library** for the packages above. The
+game agents (`supervisor`, `files`, `bridge`, launch profiles) stay per
+game — that is where the divergence actually lives, and it is real
+divergence, not drift.
+
+**The contract is profile-as-data, and it now exists** (`internal/wkagent/
+spec.go`): the console sends image, env, ports, slug and mount; the
+provisioner places the container and never learns what a "world name" is. A
+test places a *Palworld-shaped* server through the Dragonwilds
+provisioner, which is the evidence the boundary is real rather than
+aspirational. `/v1/provision` is now one caller of that path, not a second
+implementation.
+
+Two constraints are load-bearing and must survive the extraction, because a
+generic "place a container" verb is otherwise an arbitrary-code-execution
+primitive for whoever holds the token:
+
+1. **Image allowlist.** Prefix-checked, defaulting to the project's own
+   registry namespace. A leaked token deploys a newer agent, not a payload.
+2. **No caller-controlled host paths.** The caller names a slug; the
+   provisioner decides the directory under its data root. There is
+   deliberately no bind-mount field.
+
+Order of work, so the risky part comes last:
+
+1. ~~Define the spec and route the existing handler through it.~~ **Done.**
+2. Host-port awareness across *all* containers (item 6 above) — the palcon
+   collision fix, and the first thing the shared service must do that
+   neither agent does today.
+3. Lift `internal/wkagent`'s provisioner mode into its own repo, with the
+   spec as its API. wkagent keeps supervisor and companion modes.
+4. Lift the 0–8% packages into the shared library; leave the 13–27% ones
+   alone until their divergence is understood — `steamcmd` and `backup`
+   differ for game reasons, not accidental drift.
+
+Migration note for step 3: existing containers carry
+`wildskeeper.provisioned` / `wildskeeper.slug`, and every destroy and
+recreate gate reads them. A neutral namespace means recognising both for a
+release, not relabelling live containers.
+
+What this trades away: independent deployability. Today each console owns
+its own provisioner and neither can break the other. A shared service is
+stronger coupling than a shared library — a version-skewed provisioner
+breaks a *running* console, and one down means neither can provision. That
+is the cost being accepted for one host view and one implementation, and
+it is why the wire contract wants to be stable before the split rather
+than after.
