@@ -64,6 +64,15 @@ services:
       # as "discovered" containers rather than as TrueNAS apps.
       # PROVISIONER_URL: http://wkprovisioner:8811
       # PROVISIONER_TOKEN: "CHANGE-ME-same-token-as-wkprovisioner"
+      #
+      # Ilmari migration (docs/migration.md in the ilmari repo): setting
+      # ILMARI_URL routes provisioning through the shared host service
+      # instead, and wins over PROVISIONER_URL. Leave the PROVISIONER_*
+      # lines in place during the migration — the rollback is deleting
+      # these two lines and redeploying. The token is wildskeeper's OWN
+      # ilmari client token, not the provisioner's and not palcon's.
+      # ILMARI_URL: http://192.168.1.CHANGE-ME:8820
+      # ILMARI_TOKEN: "CHANGE-ME-wildskeeper-ilmari-token"
     networks:
       - default
       - wildskeeper-net

@@ -12,7 +12,6 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
-	"github.com/safwyls/wildskeeper/internal/agentctl"
 	"github.com/safwyls/wildskeeper/internal/agentfiles"
 	"github.com/safwyls/wildskeeper/internal/backup"
 	"github.com/safwyls/wildskeeper/internal/dockerctl"
@@ -41,9 +40,11 @@ type Server struct {
 	// agent-synced cache (docs/sidecar-agent.md phase 2).
 	files *agentfiles.Syncer
 	// Provisioner, when set (like CookieSecure, assigned after New), lets
-	// the new-server wizard deploy stacks itself via a provisioner-mode
-	// wkagent instead of handing the operator a file.
-	Provisioner *agentctl.Client
+	// the new-server wizard deploy stacks itself instead of handing the
+	// operator a file. Two implementations during the Ilmari migration:
+	// the legacy provisioner-mode wkagent, and the shared Ilmari host
+	// service — see provisioner.go.
+	Provisioner Provisioner
 	// Worlds, when set (assigned after New, like Provisioner), is the
 	// Dragonwilds save-reader cache behind GET /servers/{id}/world. Nil
 	// means the endpoint reports the world as unavailable — the pre-Phase-3

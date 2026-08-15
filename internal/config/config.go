@@ -34,6 +34,12 @@ type Config struct {
 	// Wildskeeper should never require access to a docker socket to run.
 	DockerHost string
 
+	// IlmariURL/Token point at the shared Ilmari host service. When set,
+	// it wins over ProvisionerURL — the cut-over flag of the Ilmari
+	// migration (docs/migration.md in the ilmari repo). Unset it and the
+	// console falls straight back to the legacy provisioner below.
+	IlmariURL   string
+	IlmariToken string
 	// ProvisionerURL/Token point at a provisioner-mode wkagent — the one
 	// component allowed to create containers. Empty means the new-server
 	// wizard hands the operator a stack file to paste instead.
@@ -70,6 +76,8 @@ func Load() (*Config, error) {
 		// The phase 5 provisioner (docs/sidecar-agent.md): when set, the
 		// new-server wizard deploys stacks itself instead of handing the
 		// operator a file to paste.
+		IlmariURL:        os.Getenv("ILMARI_URL"),
+		IlmariToken:      os.Getenv("ILMARI_TOKEN"),
 		ProvisionerURL:   os.Getenv("PROVISIONER_URL"),
 		ProvisionerToken: os.Getenv("PROVISIONER_TOKEN"),
 		AnthropicAPIKey:  os.Getenv("ANTHROPIC_API_KEY"),

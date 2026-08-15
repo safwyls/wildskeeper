@@ -60,7 +60,7 @@ type Profile struct {
 	// Command is the executable. A bare name (no separator) is looked up on
 	// PATH — that's how "wine" works; anything else resolves inside the
 	// install dir, which is how the native launcher has always worked.
-	Command string `json:"command"`
+	Command string   `json:"command"`
 	Args    []string `json:"args"`
 	// Env is added to the agent's own environment for the game process.
 	Env []string `json:"-"`

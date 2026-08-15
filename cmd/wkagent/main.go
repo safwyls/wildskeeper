@@ -74,13 +74,13 @@ func main() {
 	}
 
 	agent, err := wkagent.New(wkagent.Config{
-		Token:           os.Getenv("WKAGENT_TOKEN"),
-		InstallDir:      envOr("WKAGENT_INSTALL_DIR", "/dragonwilds"),
-		SteamCmd:        envOr("WKAGENT_STEAMCMD", "steamcmd"),
-		AppID:           appID,
-		Mode:            envOr("WKAGENT_MODE", "companion"),
-		GameCommand:     os.Getenv("WKAGENT_GAME_CMD"),
-		GameArgs:        strings.Fields(os.Getenv("WKAGENT_GAME_ARGS")),
+		Token:       os.Getenv("WKAGENT_TOKEN"),
+		InstallDir:  envOr("WKAGENT_INSTALL_DIR", "/dragonwilds"),
+		SteamCmd:    envOr("WKAGENT_STEAMCMD", "steamcmd"),
+		AppID:       appID,
+		Mode:        envOr("WKAGENT_MODE", "companion"),
+		GameCommand: os.Getenv("WKAGENT_GAME_CMD"),
+		GameArgs:    strings.Fields(os.Getenv("WKAGENT_GAME_ARGS")),
 		Launch: wkagent.LaunchConfig{
 			// The initial selection only applies to an install that has
 			// never been told otherwise — the persisted choice wins, so

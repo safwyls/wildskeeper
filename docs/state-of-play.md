@@ -325,6 +325,24 @@ engineering.
    from inside the container.~~ **Both closed 2026-08-10** — see
    "Deployed for real" below.
 
+## The Ilmari migration (2026-08-13, in progress)
+
+Provisioning is moving out of wkagent into
+[ilmari](https://github.com/safwyls/ilmari), one shared host service for
+wildskeeper and palcon both (its `docs/migration.md` is the plan of
+record). Phase 1 is done — Ilmari is deployed on the NAS read-only, and
+every endpoint was confirmed against the real Docker socket, legacy-label
+recognition included. The console side of Phase 2 is in:
+`internal/ilmari` (the client), `api.Provisioner` (the interface both
+implementations satisfy), and `api.IlmariProvisioner` — the adapter that
+now owns the game knowledge the old provisioner held (WKAGENT_* env, the
+UDP port pair, 8811, the image family, `/dragonwilds`). Setting
+`ILMARI_URL`/`ILMARI_TOKEN` cuts the console over; unsetting them falls
+back to `PROVISIONER_URL` untouched. One knowing regression: discovery
+under Ilmari cannot read modes, so the legacy provisioner container shows
+up as an adoption candidate until Phase 4 deletes it — adopt refuses it
+with a clear message.
+
 ## Deployed for real (2026-08-10)
 
 The whole production path now has one full success behind it, on a TrueNAS

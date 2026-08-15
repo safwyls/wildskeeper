@@ -25,6 +25,7 @@ import (
 	"github.com/safwyls/wildskeeper/internal/db"
 	"github.com/safwyls/wildskeeper/internal/dockerctl"
 	"github.com/safwyls/wildskeeper/internal/games/dragonwilds/dwsave"
+	"github.com/safwyls/wildskeeper/internal/ilmari"
 	"github.com/safwyls/wildskeeper/internal/notify"
 	"github.com/safwyls/wildskeeper/internal/savecache"
 	"github.com/safwyls/wildskeeper/internal/sched"
@@ -175,13 +176,24 @@ func run(logger *slog.Logger) error {
 		logger.Info("pal advisor enabled", "provider", provider, "source", "ui")
 	}
 	// Optional one-click provisioning (docs/sidecar-agent.md phase 5).
-	if cfg.ProvisionerURL != "" {
+	// Ilmari wins when both are set: it is the cut-over flag of the
+	// migration, and the legacy provisioner stays configured underneath so
+	// the fallback is deleting one env var.
+	switch {
+	case cfg.IlmariURL != "":
+		client, err := ilmari.New(cfg.IlmariURL, cfg.IlmariToken)
+		if err != nil {
+			return fmt.Errorf("configuring ilmari: %w", err)
+		}
+		apiServer.Provisioner = api.NewIlmariProvisioner(client)
+		logger.Info("provisioner enabled", "endpoint", cfg.IlmariURL, "via", "ilmari")
+	case cfg.ProvisionerURL != "":
 		provisioner, err := agentctl.New(cfg.ProvisionerURL, cfg.ProvisionerToken)
 		if err != nil {
 			return fmt.Errorf("configuring provisioner: %w", err)
 		}
 		apiServer.Provisioner = provisioner
-		logger.Info("provisioner enabled", "endpoint", cfg.ProvisionerURL)
+		logger.Info("provisioner enabled", "endpoint", cfg.ProvisionerURL, "via", "wkagent")
 	}
 	httpServer := &http.Server{
 		Addr:              cfg.HTTPAddr,
