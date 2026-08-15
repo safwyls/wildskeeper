@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { api, type DiscoveredServer, type Server, type ServerWriteInput } from "../lib/api";
+import { api, type Server, type ServerWriteInput } from "../lib/api";
 import { cn } from "../lib/utils";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
@@ -130,14 +130,11 @@ export function ServerFormDialog({
   onOpenChange,
   mode,
   server,
-  onProvision,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   mode: "create" | "edit";
   server?: Server;
-  /** Create mode only: switch to the new-server wizard instead. */
-  onProvision?: () => void;
 }) {
   const queryClient = useQueryClient();
   const [form, setForm] = useState<ServerWriteInput>(() => formStateFor(mode, server));
@@ -149,49 +146,6 @@ export function ServerFormDialog({
   // in — but a server already running on mounts opens with them showing,
   // since hiding values that exist is how you lose track of them.
   const [mountsOpen, setMountsOpen] = useState(false);
-
-  // Existing installs on the provisioner's host, offered for adoption.
-  const discoverQuery = useQuery({
-    queryKey: ["provision-discover"],
-    queryFn: () => api.provisionDiscover(),
-    enabled: open && mode === "create",
-    staleTime: 30_000,
-  });
-  const defaultsQuery = useQuery({
-    queryKey: ["provision-defaults"],
-    queryFn: () => api.provisionDefaults(),
-    enabled: open && mode === "create",
-    staleTime: 60_000,
-  });
-  // Which discoveries are offered for adoption. The legacy provisioner
-  // reports each container's WKAGENT_MODE, so "supervisor" means a game
-  // server and "provisioner" means itself. Ilmari doesn't read container
-  // env for discovery, so its candidates arrive with mode "" — unknown is
-  // not disqualifying, or the adopt list would be empty for every
-  // Ilmari-backed console (which is exactly the bug this line once had).
-  // The one wrong pick an unknown allows — the legacy provisioner's own
-  // container — is refused server-side by adopt, with an explanation.
-  const candidates = (discoverQuery.data?.servers ?? []).filter(
-    (c) => c.mode === "supervisor" || c.mode === "",
-  );
-
-  // Adoption is one click end to end: the provisioner recovers the
-  // container's own token and password, so there is nothing to type.
-  const adopt = useMutation({
-    mutationFn: (c: DiscoveredServer) => {
-      const browserHost = ["localhost", "127.0.0.1"].includes(window.location.hostname)
-        ? undefined
-        : window.location.hostname;
-      return api.adoptServer(c.name, defaultsQuery.data?.host || browserHost);
-    },
-    onSuccess: ({ server }) => {
-      queryClient.invalidateQueries({ queryKey: ["servers"] });
-      queryClient.invalidateQueries({ queryKey: ["provision-discover"] });
-      toast.success(`Adopted "${server.name}"`);
-      onOpenChange(false);
-    },
-    onError: (err) => toast.error(err instanceof Error ? err.message : "Failed to adopt server"),
-  });
 
   // Reset to fresh values every time the dialog opens, so stale form state
   // from a previous open (or a different server, in edit mode) doesn't leak in.
@@ -254,49 +208,17 @@ export function ServerFormDialog({
           <DialogHeader>
             <DialogTitle>{mode === "create" ? "Add an existing server" : `Edit "${server?.name}"`}</DialogTitle>
             <DialogDescription>
-              Credentials come from your server's <code>DedicatedServer.ini</code>.
-              {mode === "edit" && " Leave a password blank to keep the current one."}
+              {mode === "create"
+                ? "Wildskeeper only needs to know how to reach it — pick the shape it runs in."
+                : "Leave the agent token blank to keep the stored one."}
             </DialogDescription>
           </DialogHeader>
-
-          {mode === "create" && onProvision && (
-            <button
-              type="button"
-              onClick={onProvision}
-              className="mt-3 w-full rounded-xl border border-dashed border-wk-ember/50 px-3 py-2 text-left text-xs text-wk-parchment/60 transition hover:border-wk-ember hover:bg-wk-ember/5"
-            >
-              Starting from scratch? <span className="font-semibold text-wk-ember">Provision a new server</span> —
-              Wildskeeper generates the whole deployment for you.
-            </button>
-          )}
 
           <div className="mt-4">
             <ModeTabs kind={kind} onChange={setKind} />
             <p className="mt-2 text-xs text-muted-foreground">{KIND_BLURB[kind]}</p>
             <WiringReadout caps={caps} hint={readoutHint(kind, caps)} />
           </div>
-
-          {mode === "create" && kind === "supervised" && candidates.length > 0 && (
-            <div className="mt-3 space-y-1.5">
-              <p className="text-xs font-semibold text-wk-parchment/60">Found on the provisioner's host</p>
-              {candidates.map((c) => (
-                <button
-                  key={c.name}
-                  type="button"
-                  disabled={c.registered || adopt.isPending}
-                  onClick={() => adopt.mutate(c)}
-                  className="flex w-full items-center gap-2 rounded-xl border border-wk-edge px-3 py-2 text-left text-xs transition hover:border-wk-edge hover:bg-wk-parchment/5 disabled:opacity-50"
-                >
-                  <span className={cn("h-2 w-2 shrink-0 rounded-full", c.running ? "bg-wk-ok" : "bg-wk-parchment/30")} />
-                  <span className="font-mono">{c.name}</span>
-                  <span className="text-wk-parchment/40">agent :{c.agentPort || "?"}</span>
-                  <span className="ml-auto text-wk-parchment/40">
-                    {c.registered ? "already added" : adopt.isPending ? "adopting…" : "click to adopt"}
-                  </span>
-                </button>
-              ))}
-            </div>
-          )}
 
           <div id={`server-form-${kind}`} role="tabpanel" aria-label={`${kind} settings`}>
             <Section title="Connection">

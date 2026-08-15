@@ -5,8 +5,7 @@ import { type Server } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { cn } from "../lib/utils";
 import { WkServerRune } from "./wildskeeper/WkServerRune";
-import { ServerFormDialog } from "./ServerFormDialog";
-import { RaiseServerDialog } from "./wildskeeper/RaiseServerDialog";
+import { AddServerFlow } from "./AddServerFlow";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 /** Desktop icon rail: sigil coin, one rune coin per server, add button, logout. */
@@ -15,7 +14,6 @@ export function ServerRail({ servers, activeServerId }: { servers: Server[]; act
   const navigate = useNavigate();
   const location = useLocation();
   const [addOpen, setAddOpen] = useState(false);
-  const [raiseOpen, setRaiseOpen] = useState(false);
 
   const goToServer = (id: number) => navigate(`/servers/${id}`);
 
@@ -80,16 +78,7 @@ export function ServerRail({ servers, activeServerId }: { servers: Server[]; act
         <TooltipContent side="right">Log out {username}</TooltipContent>
       </Tooltip>
 
-      <ServerFormDialog
-        open={addOpen}
-        onOpenChange={setAddOpen}
-        mode="create"
-        onProvision={() => {
-          setAddOpen(false);
-          setRaiseOpen(true);
-        }}
-      />
-      <RaiseServerDialog open={raiseOpen} onOpenChange={setRaiseOpen} />
+      <AddServerFlow open={addOpen} onOpenChange={setAddOpen} />
     </aside>
   );
 }
