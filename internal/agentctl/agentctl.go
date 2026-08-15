@@ -216,6 +216,22 @@ func (c *Client) BridgeCommand(ctx context.Context, command string, args map[str
 	return res.Data, nil
 }
 
+// InstallBridgeKit asks the agent to lay its baked-in UE4SS+dwbridge kit
+// next to the server exe (Wine image only; the plain image answers 501).
+// RestartRequired is true when the game was running, since the mod only
+// loads at process start.
+func (c *Client) InstallBridgeKit(ctx context.Context) (restartRequired bool, err error) {
+	var out struct {
+		RestartRequired bool `json:"restartRequired"`
+	}
+	// The kit is a few hundred files; give a slow volume more than the
+	// default verb timeout.
+	if err := c.do(ctx, http.MethodPost, "/v1/bridge/install", nil, &out, 60*time.Second); err != nil {
+		return false, err
+	}
+	return out.RestartRequired, nil
+}
+
 // SetLaunchProfile chooses which of the game's builds the agent starts next
 // — native Linux, or the Windows build under Wine that can carry the
 // dwbridge mod. It applies at the next start by design: the two builds come

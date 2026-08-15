@@ -40,6 +40,10 @@ x-secrets: &secrets
 services:
   wildskeeper:
     image: ghcr.io/safwyls/wildskeeper:latest
+    # TrueNAS's compose backend defaults to pull_policy "missing": once the
+    # tag exists locally, redeploys silently reuse the stale image. "always"
+    # re-resolves :latest against ghcr on every app update/redeploy.
+    pull_policy: always
     # Runs as the TrueNAS apps user; must match the dataset chown (step 1).
     user: "568:568"
     restart: unless-stopped

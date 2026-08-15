@@ -92,6 +92,7 @@ func main() {
 			GameExe:      os.Getenv("WKAGENT_GAME_EXE"),
 			NativeScript: os.Getenv("WKAGENT_NATIVE_SCRIPT"),
 		},
+		BridgeKitDir:    os.Getenv("WKAGENT_BRIDGE_KIT_DIR"),
 		GamePort:        gamePort,
 		StopGrace:       stopGrace,
 		AdminPassword:   os.Getenv("WKAGENT_ADMIN_PASSWORD"),

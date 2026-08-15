@@ -89,6 +89,11 @@ type Config struct {
 	// Launch selects and tunes the launch profile — which of the game's two
 	// builds to run. Supervisor mode only; see launch.go.
 	Launch LaunchConfig
+	// BridgeKitDir is where a UE4SS+dwbridge kit ships inside this image,
+	// laid out exactly as it must land next to the server exe. Empty (the
+	// plain image) means /v1/bridge/install honestly answers "no kit here".
+	// Supervisor mode only; see bridgekit.go.
+	BridgeKitDir string
 	// StopGrace is how long a SIGTERM'd game gets before SIGKILL;
 	// defaults to 30s.
 	StopGrace time.Duration
@@ -267,6 +272,9 @@ func (a *Agent) Handler() http.Handler {
 		// nil bridge (companion/provisioner) answers 400 like the power
 		// verbs, since there is no game to command.
 		r.Post("/bridge/command", a.handleBridgeCommand)
+		// One-click mod support: copy the image's UE4SS kit next to the
+		// exe (bridgekit.go). 501 on the plain image, which has no kit.
+		r.Post("/bridge/install", a.handleBridgeInstall)
 
 		// Which of the game's two builds to launch. Reading is part of
 		// health; this is the write side, and it applies at the next
@@ -590,6 +598,14 @@ type LaunchStatus struct {
 	// ConfigPath is where this build's DedicatedServer.ini lives, relative
 	// to the install root — it moves with the platform.
 	ConfigPath string `json:"configPath"`
+	// BridgeKit reports whether this agent's image carries the UE4SS kit,
+	// i.e. whether /v1/bridge/install can do anything at all. False on the
+	// plain image, so the console never offers a button that would 501.
+	BridgeKit bool `json:"bridgeKit"`
+	// BridgeInstalled reports whether a UE4SS install already sits next to
+	// the exe — the console offers install exactly when a mod-capable build
+	// is selected, a kit exists, and this is false.
+	BridgeInstalled bool `json:"bridgeInstalled"`
 }
 
 // steamPlatform is the depot the selected build needs, so an install or
@@ -611,7 +627,9 @@ func (a *Agent) launchStatus() *LaunchStatus {
 		Installed:  p.installed(a.cfg.InstallDir),
 		Runnable:   p.runnable(a.cfg.InstallDir),
 		ConfigPath: p.ConfigRel,
+		BridgeKit:  a.bridgeKitPresent(),
 	}
+	st.BridgeInstalled = bridgeInstalled(a.cfg.InstallDir)
 	if p.Name != ProfileCustom {
 		st.Available = SelectableProfiles
 	}

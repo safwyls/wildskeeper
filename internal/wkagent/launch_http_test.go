@@ -42,12 +42,14 @@ func authed(t *testing.T, method, url string, body any) (*http.Response, []byte)
 }
 
 type launchStatus struct {
-	Profile        string   `json:"profile"`
-	Mods           bool     `json:"mods"`
-	Installed      bool     `json:"installed"`
-	Available      []string `json:"available"`
-	PendingRestart bool     `json:"pendingRestart"`
-	ConfigPath     string   `json:"configPath"`
+	Profile         string   `json:"profile"`
+	Mods            bool     `json:"mods"`
+	Installed       bool     `json:"installed"`
+	Available       []string `json:"available"`
+	PendingRestart  bool     `json:"pendingRestart"`
+	ConfigPath      string   `json:"configPath"`
+	BridgeKit       bool     `json:"bridgeKit"`
+	BridgeInstalled bool     `json:"bridgeInstalled"`
 }
 
 func healthLaunch(t *testing.T, srv string) launchStatus {
@@ -196,7 +198,10 @@ func TestWineProfileLaunchesThroughPathWithTheModEnvironment(t *testing.T) {
 	var out []byte
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if data, err := os.ReadFile(filepath.Join(binDir, "launched")); err == nil {
+		// The stub's redirect creates the file before printf fills it, so
+		// existence alone can hand back a torn read — wait for the last
+		// line it writes.
+		if data, err := os.ReadFile(filepath.Join(binDir, "launched")); err == nil && strings.Contains(string(data), "PWD=") {
 			out = data
 			break
 		}
@@ -217,6 +222,13 @@ func TestWineProfileLaunchesThroughPathWithTheModEnvironment(t *testing.T) {
 	}
 	if !strings.Contains(got, `DWBRIDGE_DIR=Z:\`) {
 		t.Errorf("the mod would not find the bridge directory: %s", got)
+	}
+	// The rendezvous directory must exist by the time the game is up:
+	// neither the mod nor the bridge reader creates it, so a start on a
+	// modded profile that skips the mkdir leaves the mod heartbeating
+	// into the void (first real Wine deployment found exactly this).
+	if fi, err := os.Stat(filepath.Join(install, "dwbridge")); err != nil || !fi.IsDir() {
+		t.Errorf("starting the wine profile did not create the bridge directory: %v", err)
 	}
 }
 

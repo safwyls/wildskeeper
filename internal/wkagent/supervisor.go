@@ -558,6 +558,19 @@ func (s *supervisor) prepareRuntime() {
 		}
 	}
 
+	// The bridge directory is the file-IPC rendezvous with the dwbridge
+	// mod (DWBRIDGE_DIR). Neither side creates it: the mod's io.open fails
+	// silently without it, and the agent reads a missing dir as "no bridge
+	// expected" — so a modded profile without this mkdir has a mod that
+	// heartbeats into the void (found the hard way on the first real Wine
+	// deployment). Only for mod-capable profiles, so the missing-dir
+	// semantics stay meaningful on the native build.
+	if s.profile.Mods {
+		if err := os.MkdirAll(filepath.Join(s.installDir, bridgeDirName), 0o755); err != nil {
+			s.logger.Warn("could not create the bridge directory", "error", err)
+		}
+	}
+
 	// The game loads ~/.steam/sdk64/steamclient.so; SteamCMD keeps its
 	// copy wherever it bootstrapped. Best-effort: absence only matters to
 	// Steam-networking features, and the game logs it loudly itself.

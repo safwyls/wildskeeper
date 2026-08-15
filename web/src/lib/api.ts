@@ -294,6 +294,10 @@ export interface Launch {
   /** The selection has changed since the running process started. */
   pendingRestart: boolean;
   configPath: string;
+  /** The agent's image carries the UE4SS kit, so one-click install exists. */
+  bridgeKit?: boolean;
+  /** A UE4SS install already sits next to the exe. */
+  bridgeInstalled?: boolean;
 }
 
 export const LAUNCH_PROFILES: Record<string, { label: string; blurb: string }> = {
@@ -934,6 +938,13 @@ export const api = {
     request<{ container: string; image: string; previousImage: string }>(`/servers/${id}/agent/image`, {
       method: "POST",
       body: JSON.stringify({ imageTag }),
+    }),
+  /** One-click mod support: the agent lays its baked-in UE4SS+dwbridge kit
+   * next to the server exe. Only offered when the launch payload says the
+   * kit exists and nothing is installed yet. */
+  installBridge: (id: number) =>
+    request<{ installed: boolean; restartRequired: boolean }>(`/servers/${id}/bridge/install`, {
+      method: "POST",
     }),
   setServerLaunch: (id: number, profile: string) =>
     request<Launch>(`/servers/${id}/launch`, { method: "PUT", body: JSON.stringify({ profile }) }),

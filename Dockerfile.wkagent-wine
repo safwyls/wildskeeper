@@ -14,10 +14,14 @@
 # Build:
 #   docker build -f Dockerfile.wkagent-wine -t ghcr.io/safwyls/wkagent:wine .
 #
-# The mod itself is not baked in. It is laid out next to the server exe in
-# the install volume (tools/dwbridge/README.md, "Install"), which is data,
-# not image: baking it would pin a mod version to an agent version and make
-# updating either one a rebuild.
+# The mod files still live next to the server exe in the install volume —
+# that is data, not image, and Steam updates and operators own it. What this
+# image *does* carry is the seed: the pinned-by-proof UE4SS kit at
+# /opt/dwbridge-kit (tools/dwbridge-kit/README.md), which the agent copies
+# into the install only when the operator asks (POST /v1/bridge/install /
+# the dashboard's "Install mod support") and only when no ue4ss/ exists.
+# Explicit act, never an overwrite — the version-coupling objection to
+# baking applied to silent syncing, not to an installer payload.
 
 # ---- build ----
 FROM docker.io/library/golang:1.26-alpine AS build
@@ -27,9 +31,30 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 go build -o /out/wkagent ./cmd/wkagent
 
+# ---- version.dll shim ----
+# Built from source here rather than committed: the source is 200 lines in
+# this repo, and mingw makes the build reproducible.
+FROM docker.io/library/debian:12-slim AS shim
+RUN apt-get update && apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64 \
+    && rm -rf /var/lib/apt/lists/*
+COPY tools/ue4ss-wine-shim /src
+RUN x86_64-w64-mingw32-gcc -shared -O1 -o /version.dll /src/version_proxy.c /src/version.def
+
+# ---- dwbridge kit ----
+# Assembled at /opt/dwbridge-kit exactly as it must land next to the server
+# exe: the pinned UE4SS tarball (see tools/dwbridge-kit/README.md for why a
+# committed binary is the only pin that can't rot), the shim, and the mod
+# from this repo — so the mod version always matches the agent it ships with.
+FROM docker.io/library/debian:12-slim AS kit
+COPY tools/dwbridge-kit/ue4ss-1c1a1497.tar.gz /tmp/
+RUN mkdir -p /opt/dwbridge-kit && tar xzf /tmp/ue4ss-1c1a1497.tar.gz -C /opt/dwbridge-kit
+COPY tools/dwbridge/Scripts /opt/dwbridge-kit/ue4ss/Mods/dwbridge/Scripts
+COPY --from=shim /version.dll /opt/dwbridge-kit/version.dll
+
 # ---- runtime ----
 FROM docker.io/steamcmd/steamcmd:debian-12
 COPY --from=build /out/wkagent /usr/local/bin/wkagent
+COPY --from=kit /opt/dwbridge-kit /opt/dwbridge-kit
 
 # Wine from WineHQ rather than Debian's: the feasibility run that proved
 # UE4SS injects was on Wine 11, and Debian 12 ships far older. i386 is
@@ -59,6 +84,9 @@ ENV HOME=/home/wkagent \
     # rebuilds a missing prefix on first run, which is slow and would
     # otherwise happen on every deploy.
     WKAGENT_WINE_PREFIX=/dragonwilds/.wine \
+    # Where /v1/bridge/install copies the UE4SS kit from. The plain image
+    # leaves this unset, so the verb honestly answers "no kit in this image".
+    WKAGENT_BRIDGE_KIT_DIR=/opt/dwbridge-kit \
     # A headless server has no display, and Wine's chatter would otherwise
     # interleave with the game log the player list is parsed from.
     WINEDEBUG=-all

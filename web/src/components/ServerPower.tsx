@@ -480,6 +480,7 @@ function LaunchMode({ serverId, canEdit }: { serverId: number; canEdit: boolean 
   const queryClient = useQueryClient();
   const [switchTo, setSwitchTo] = useState<string | null>(null);
   const [rebuildOpen, setRebuildOpen] = useState(false);
+  const [installOpen, setInstallOpen] = useState(false);
 
   const launchQuery = useQuery({
     queryKey: ["launch", serverId],
@@ -521,6 +522,25 @@ function LaunchMode({ serverId, canEdit }: { serverId: number; canEdit: boolean 
     onError: (err) => toast.error("Could not rebuild the agent", { description: errorDetail(err) }),
   });
 
+  // One-click mod support: the agent copies the UE4SS+dwbridge kit baked
+  // into its Wine image next to the server exe. Offered exactly when the
+  // agent says it can act (kit present, modded build selected, nothing
+  // installed yet) — every other state renders as text, not a dead button.
+  const installBridge = useMutation({
+    mutationFn: () => api.installBridge(serverId),
+    onSuccess: (res) => {
+      toast.success("Mod support installed", {
+        description: res.restartRequired
+          ? "The mod loads at process start — restart the server to activate it."
+          : "It will load when the server starts.",
+      });
+      setInstallOpen(false);
+      queryClient.invalidateQueries({ queryKey: ["launch", serverId] });
+      queryClient.invalidateQueries({ queryKey: ["capabilities", serverId] });
+    },
+    onError: (err) => toast.error("Could not install mod support", { description: errorDetail(err) }),
+  });
+
   const launch = launchQuery.data;
   // A companion-mode agent (400) has no build to choose, and a server whose
   // agent is down shouldn't grow a broken control — in both cases the row
@@ -549,6 +569,19 @@ function LaunchMode({ serverId, canEdit }: { serverId: number; canEdit: boolean 
             className="mt-1 text-xs font-semibold text-wk-brasshi underline-offset-2 hover:underline"
           >
             Rebuild agent on the Wine image →
+          </button>
+        )}
+        {/* The last mile from "the Windows build runs" to "commands work":
+            the agent lays its baked-in UE4SS+dwbridge kit next to the exe.
+            Gated on the agent's own report so the button can only appear
+            when the call would succeed. */}
+        {launch.mods && launch.runnable !== false && launch.installed && launch.bridgeKit && !launch.bridgeInstalled && canEdit && (
+          <button
+            type="button"
+            onClick={() => setInstallOpen(true)}
+            className="mt-1 text-xs font-semibold text-wk-brasshi underline-offset-2 hover:underline"
+          >
+            Install mod support →
           </button>
         )}
       </div>
@@ -592,6 +625,28 @@ function LaunchMode({ serverId, canEdit }: { serverId: number; canEdit: boolean 
             </Button>
             <Button disabled={rebuild.isPending} onClick={() => rebuild.mutate("latest-wine")}>
               {rebuild.isPending ? "Rebuilding…" : "Rebuild agent"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={installOpen} onOpenChange={(open) => !open && setInstallOpen(false)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Install mod support?</DialogTitle>
+            <DialogDescription>
+              Wildskeeper copies the proven UE4SS loader and the dwbridge mod from the agent&apos;s image into the
+              game install, next to the server executable. This is what makes on-demand saves (and any future
+              commands) work. Your world and settings are untouched, and nothing already installed is overwritten.
+              The mod loads when the game process starts, so a running server needs a restart afterwards.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button variant="outline" onClick={() => setInstallOpen(false)}>
+              Cancel
+            </Button>
+            <Button disabled={installBridge.isPending} onClick={() => installBridge.mutate()}>
+              {installBridge.isPending ? "Installing…" : "Install mod support"}
             </Button>
           </DialogFooter>
         </DialogContent>

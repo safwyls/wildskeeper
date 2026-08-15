@@ -40,6 +40,30 @@ func (s *Server) handleGetLaunch(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, health.Launch)
 }
 
+// handleInstallBridge forwards the one-click mod install to the agent. The
+// agent owns every precondition (kit present, Windows build selected and
+// installed, nothing already there) and answers with statuses the UI maps
+// to honest copy — this handler only adds auth and audit.
+func (s *Server) handleInstallBridge(w http.ResponseWriter, r *http.Request) {
+	srv, ok := s.loadServer(w, r)
+	if !ok {
+		return
+	}
+	agent := s.agentFor(srv)
+	if agent == nil {
+		writeError(w, http.StatusBadRequest, "no agent configured for this server")
+		return
+	}
+	restart, err := agent.InstallBridgeKit(r.Context())
+	if err != nil {
+		writeAgentError(w, err)
+		return
+	}
+	// Worth auditing: it changes what the next game start loads.
+	s.audit(r, srv.ID, "bridge-install", "ue4ss kit")
+	writeJSON(w, http.StatusOK, map[string]any{"installed": true, "restartRequired": restart})
+}
+
 func (s *Server) handleSetLaunch(w http.ResponseWriter, r *http.Request) {
 	srv, ok := s.loadServer(w, r)
 	if !ok {

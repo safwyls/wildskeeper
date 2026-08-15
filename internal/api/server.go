@@ -165,6 +165,11 @@ func (s *Server) Routes(staticFS fs.FS) http.Handler {
 				// Admin-only: it destroys and recreates a container, which
 				// is provisioning, not day-to-day power.
 				r.With(s.requireAdmin).Post("/agent/image", s.handleRecreateAgent)
+				// One-click mod support: the agent copies its baked-in
+				// UE4SS+dwbridge kit next to the exe. Power territory like
+				// the launch profile it depends on — it changes what the
+				// next start runs, not the machine it runs on.
+				r.With(s.requirePermission(store.PermPower)).Post("/bridge/install", s.handleInstallBridge)
 				r.With(s.requirePermission(store.PermPower)).Post("/steam-cache/clear", s.handleClearSteamCache)
 				r.With(s.requirePermission(store.PermPower)).Post("/steam/update", s.handleSteamUpdateStart)
 				r.With(s.requirePermission(store.PermPower)).Get("/steam/update", s.handleSteamUpdateStatus)
