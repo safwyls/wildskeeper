@@ -272,6 +272,9 @@ func (a *Agent) Handler() http.Handler {
 		// nil bridge (companion/provisioner) answers 400 like the power
 		// verbs, since there is no game to command.
 		r.Post("/bridge/command", a.handleBridgeCommand)
+		// Live telemetry the mod publishes without being asked (roster,
+		// world clock) — reads state.json, never touches the game.
+		r.Get("/bridge/state", a.handleBridgeState)
 		// One-click mod support: copy the image's UE4SS kit next to the
 		// exe (bridgekit.go). 501 on the plain image, which has no kit.
 		r.Post("/bridge/install", a.handleBridgeInstall)
@@ -516,6 +519,17 @@ func (a *Agent) handleGameLogs(w http.ResponseWriter, r *http.Request) {
 // or an error mapped to the status the caller can act on: 400 for a command
 // the mod doesn't implement (a capability gap the UI states, not a fault),
 // 503 for a bridge that's absent or unresponsive (retry once the mod is up).
+// handleBridgeState serves the mod's live telemetry (roster, world clock).
+// Always 200 with an availability flag rather than 404s: "no live data" is
+// a normal state of a healthy modless server, not an error to alarm on.
+func (a *Agent) handleBridgeState(w http.ResponseWriter, r *http.Request) {
+	if a.bridge == nil {
+		writeError(w, http.StatusBadRequest, "agent is not supervising a game — the dwbridge channel needs supervisor mode")
+		return
+	}
+	writeJSON(w, http.StatusOK, a.bridge.State())
+}
+
 func (a *Agent) handleBridgeCommand(w http.ResponseWriter, r *http.Request) {
 	if a.bridge == nil {
 		writeError(w, http.StatusBadRequest, "agent is not supervising a game — the dwbridge channel needs supervisor mode")

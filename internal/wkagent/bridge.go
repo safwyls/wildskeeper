@@ -124,6 +124,69 @@ func (b *bridge) Status() *BridgeStatus {
 	}
 }
 
+// BridgePlayer is one live player as the mod reports it: the engine's
+// replicated roster entry plus pawn world position (UE units).
+type BridgePlayer struct {
+	Name string  `json:"name"`
+	X    float64 `json:"x"`
+	Y    float64 `json:"y"`
+	Z    float64 `json:"z"`
+}
+
+// BridgeWorld is the in-game clock, fields present only once the mod's
+// property probing confirms their names against a live server.
+type BridgeWorld struct {
+	Day       *float64 `json:"day,omitempty"`
+	TimeOfDay *float64 `json:"timeOfDay,omitempty"`
+}
+
+// BridgeState is the live telemetry the mod publishes alongside its
+// heartbeat (state.json). Available=false covers every "no data" cause the
+// same way the heartbeat does: no mod, no world, or a stale file.
+type BridgeState struct {
+	Available  bool           `json:"available"`
+	AgeSeconds int            `json:"ageSeconds,omitempty"`
+	Players    []BridgePlayer `json:"players,omitempty"`
+	World      *BridgeWorld   `json:"world,omitempty"`
+}
+
+// State reads the mod's telemetry file. Same freshness rule as commands:
+// data older than heartbeatFresh is "unavailable", not "slightly old" —
+// serving a roster from a dead mod would show ghosts.
+func (b *bridge) State() *BridgeState {
+	data, err := os.ReadFile(filepath.Join(b.dir, "state.json"))
+	if err != nil {
+		return &BridgeState{}
+	}
+	var raw struct {
+		TS      int64          `json:"ts"`
+		Players []BridgePlayer `json:"players"`
+		World   *BridgeWorld   `json:"world"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return &BridgeState{}
+	}
+	age := time.Since(time.Unix(raw.TS, 0))
+	if age < 0 {
+		age = 0
+	}
+	if age > heartbeatFresh {
+		return &BridgeState{AgeSeconds: int(age.Seconds())}
+	}
+	// An empty world object ({}) carries no information; nil keeps the
+	// JSON honest about which fields the mod actually confirmed.
+	world := raw.World
+	if world != nil && world.Day == nil && world.TimeOfDay == nil {
+		world = nil
+	}
+	return &BridgeState{
+		Available:  true,
+		AgeSeconds: int(age.Seconds()),
+		Players:    raw.Players,
+		World:      world,
+	}
+}
+
 func (b *bridge) heartbeat() (*bridgeHeartbeat, time.Duration, error) {
 	data, err := os.ReadFile(filepath.Join(b.dir, "heartbeat.json"))
 	if err != nil {

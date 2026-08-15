@@ -29,6 +29,9 @@ type fakeAgent struct {
 	bridgeStatus int
 	bridgeBody   map[string]any
 	lastCommand  map[string]any
+	// bridgeState, when set, is served at /v1/bridge/state; nil answers
+	// 404 like an agent from before the telemetry channel existed.
+	bridgeState map[string]any
 }
 
 func newFakeAgent(t *testing.T) (*fakeAgent, string) {
@@ -65,6 +68,12 @@ func newFakeAgent(t *testing.T) (*fakeAgent, string) {
 			} else {
 				json.NewEncoder(w).Encode(map[string]any{"ok": true})
 			}
+		case "/v1/bridge/state":
+			if f.bridgeState == nil {
+				http.NotFound(w, r)
+				return
+			}
+			json.NewEncoder(w).Encode(f.bridgeState)
 		default:
 			http.NotFound(w, r)
 		}
@@ -106,6 +115,65 @@ func TestInfoAndPlayersDeriveFromAgent(t *testing.T) {
 	}
 	if len(players) != 1 || players[0].Name != "Vexmarrow" || players[0].UserID != "aaaa000000000000000000000000aaaa" {
 		t.Fatalf("players = %+v", players)
+	}
+}
+
+// The bridge telemetry overlays the log roster: positions for players both
+// sources know, a full row for players only the engine reports — and none
+// of it may break the log-only path (agents predating the endpoint 404 it).
+func TestPlayersMergeBridgeTelemetry(t *testing.T) {
+	agent, url := newFakeAgent(t)
+	agent.set("running",
+		"[x][1]LogDomMatcherSession: Player ADDED to session [aaaa000000000000000000000000aaaa]-[Vexmarrow]",
+	)
+	agent.mu.Lock()
+	agent.bridgeState = map[string]any{
+		"available": true,
+		"players": []map[string]any{
+			{"name": "Vexmarrow", "x": 12345.6, "y": -789.0, "z": 42.0},
+			{"name": "Kaelith", "x": 100.0, "y": 200.0, "z": 0.0},
+		},
+	}
+	agent.mu.Unlock()
+
+	players, err := newClient(t, url).Players(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(players) != 2 {
+		t.Fatalf("players = %+v, want the log player plus the bridge-only one", players)
+	}
+	if players[0].Name != "Vexmarrow" || players[0].LocationX != 12345.6 || players[0].LocationY != -789.0 {
+		t.Errorf("log-derived player did not gain its live position: %+v", players[0])
+	}
+	if players[0].UserID != "aaaa000000000000000000000000aaaa" {
+		t.Errorf("the log-derived id must survive the merge: %+v", players[0])
+	}
+	if players[1].Name != "Kaelith" || players[1].LocationX != 100.0 {
+		t.Errorf("bridge-only player missing or unpositioned: %+v", players[1])
+	}
+
+	// The count follows the bridge too: the Windows build lacks the join
+	// log line, so live telemetry is the only honest census on a modded
+	// server (2 here, where the log knows only 1).
+	info, err := newClient(t, url).Info(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.PlayerCount != 2 {
+		t.Errorf("PlayerCount = %d, want the bridge's 2", info.PlayerCount)
+	}
+
+	// A stale bridge must change nothing: the roster is the log's alone.
+	agent.mu.Lock()
+	agent.bridgeState = map[string]any{"available": false}
+	agent.mu.Unlock()
+	players, err = newClient(t, url).Players(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(players) != 1 || players[0].LocationX != 0 {
+		t.Errorf("unavailable bridge state leaked into the roster: %+v", players)
 	}
 }
 

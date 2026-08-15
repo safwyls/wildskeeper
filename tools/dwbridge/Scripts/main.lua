@@ -72,7 +72,12 @@ local function jsonValue(v)
     if t == "string" then
         return '"' .. jsonEscape(v) .. '"'
     elseif t == "number" then
-        return string.format("%d", v)
+        -- Positions are floats; %d on those would throw in Lua 5.4. Two
+        -- decimals is centimetre precision in UE units — plenty for a map.
+        if v == math.floor(v) and v == v and v ~= math.huge and v ~= -math.huge then
+            return string.format("%d", v)
+        end
+        return string.format("%.2f", v)
     elseif t == "boolean" then
         return v and "true" or "false"
     elseif t == "table" then
@@ -246,6 +251,88 @@ local function writeHeartbeat()
 end
 
 ----------------------------------------------------------------------
+-- Live state (state.json): the read-only telemetry channel.
+--
+-- Published on the heartbeat cadence rather than fetched by command:
+-- periodic state is what a polling file transport is *best* at, and it
+-- costs the agent nothing to read. Everything here is property reads on
+-- replicated engine objects — the safe side of the feasibility line (the
+-- recon doc's rule: never call native UFunctions). Every read is
+-- pcall-guarded per player and per field, so a patch that renames one
+-- property degrades that field, not the roster and never the mod.
+----------------------------------------------------------------------
+
+-- collectPlayers walks GameState.PlayerArray — the engine's replicated
+-- roster, present on every UE server — and reads name and pawn position.
+-- The root component's RelativeLocation IS world location for a root, and
+-- is a plain struct property (K2_GetActorLocation would be a native call).
+local function collectPlayers()
+    local players = {}
+    local gs = FindFirstOf("GameStateBase")
+    if not (gs and gs:IsValid()) then return players end
+    local ok, arr = pcall(function() return gs.PlayerArray end)
+    if not ok or not arr then return players end
+    local n = 0
+    pcall(function() n = #arr end)
+    for i = 1, n do
+        local pok, entry = pcall(function()
+            local ps = arr[i]
+            if not (ps and ps:IsValid()) then return nil end
+            local e = {}
+            local nok, name = pcall(function() return ps.PlayerNamePrivate:ToString() end)
+            if nok and name and name ~= "" then e.name = name end
+            local wok, pawn = pcall(function() return ps.PawnPrivate end)
+            if wok and pawn and pawn:IsValid() then
+                local lok, loc = pcall(function() return pawn.RootComponent.RelativeLocation end)
+                if lok and loc then
+                    e.x, e.y, e.z = loc.X, loc.Y, loc.Z
+                end
+            end
+            return e
+        end)
+        -- A player we can't even name is omitted rather than sent blank.
+        if pok and entry and entry.name then players[#players + 1] = entry end
+    end
+    return players
+end
+
+-- collectWorld tries the in-game clock. The subsystem class is known from
+-- the server log (DominionInGameTimeSubsystem); its property names are not,
+-- so this probes a shortlist and omits what isn't there. Fields appearing
+-- in state.json after a real run is how the right names get confirmed.
+local function collectWorld()
+    local w = {}
+    local ts = FindFirstOf("DominionInGameTimeSubsystem")
+    if not (ts and ts:IsValid()) then return w end
+    for field, candidates in pairs({
+        day = { "CurrentDay", "Day", "DayNumber", "DayCount" },
+        timeOfDay = { "CurrentTimeOfDay", "TimeOfDay", "CurrentTime", "InGameTime" },
+    }) do
+        for _, prop in ipairs(candidates) do
+            local ok, v = pcall(function() return ts[prop] end)
+            if ok and type(v) == "number" then
+                w[field] = v
+                break
+            end
+        end
+    end
+    return w
+end
+
+local function writeState()
+    local players = collectPlayers()
+    local parts = {}
+    for _, p in ipairs(players) do
+        parts[#parts + 1] = encodeObject({ "name", "x", "y", "z" }, p)
+    end
+    local world = collectWorld()
+    local worldJSON = encodeObject({ "day", "timeOfDay" }, world)
+    writeFileAtomic(path("state.json"),
+        string.format('{"ts":%d,"players":[%s],"world":%s}',
+            os.time(), table.concat(parts, ","), worldJSON))
+end
+
+----------------------------------------------------------------------
 -- Boot
 ----------------------------------------------------------------------
 
@@ -267,6 +354,9 @@ end)
 
 LoopAsync(HEARTBEAT_MS, function()
     pcall(writeHeartbeat)
+    -- State rides the same timer but its own pcall: a bad object walk must
+    -- never cost the heartbeat, which is what "the bridge is up" means.
+    pcall(writeState)
     return false
 end)
 

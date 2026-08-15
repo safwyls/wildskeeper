@@ -105,8 +105,16 @@ func (c *Client) Info(ctx context.Context) (*game.ServerInfo, error) {
 		// power panel (agent-backed) stays available alongside it.
 		return nil, fmt.Errorf("server process is %s", st.State)
 	}
+	count := len(c.tracker.Sessions())
+	// The engine's replicated roster outranks log inference when the mod is
+	// publishing it: the Windows build doesn't emit the join line the log
+	// rules were built on, so on a modded server the tracker undercounts —
+	// and the bridge sees exactly who the server itself thinks is present.
+	if st, err := c.agent.BridgeState(ctx); err == nil && st.Available {
+		count = len(st.Players)
+	}
 	return &game.ServerInfo{
-		PlayerCount: len(c.tracker.Sessions()),
+		PlayerCount: count,
 		Transport:   "agent",
 	}, nil
 }
@@ -138,7 +146,38 @@ func (c *Client) Players(ctx context.Context) ([]game.Player, error) {
 			UserID:    uid,
 		})
 	}
+	c.enrichFromBridge(ctx, &players)
 	return players, nil
+}
+
+// enrichFromBridge overlays the dwbridge mod's live telemetry onto the
+// log-derived roster: positions for players both sources know, and rows for
+// players only the engine's replicated roster carries (a session the log
+// parser missed survives here with the name as its id, same as a v0 line).
+// Best-effort by design — the log roster stood alone before the bridge
+// existed and must keep working when the mod is absent, stale, or the extra
+// round-trip fails; ids stay log-derived because the bridge doesn't carry
+// them, and identity (kick/ban someday) matters more than coordinates.
+func (c *Client) enrichFromBridge(ctx context.Context, players *[]game.Player) {
+	st, err := c.agent.BridgeState(ctx)
+	if err != nil || !st.Available {
+		return
+	}
+	byName := make(map[string]int, len(*players))
+	for i := range *players {
+		byName[(*players)[i].Name] = i
+	}
+	for _, bp := range st.Players {
+		if i, ok := byName[bp.Name]; ok {
+			(*players)[i].LocationX = bp.X
+			(*players)[i].LocationY = bp.Y
+		} else {
+			*players = append(*players, game.Player{
+				Name: bp.Name, PlayerUID: bp.Name, UserID: bp.Name,
+				LocationX: bp.X, LocationY: bp.Y,
+			})
+		}
+	}
 }
 
 // The command tier. Dragonwilds has no native command protocol, so these

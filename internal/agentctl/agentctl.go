@@ -216,6 +216,17 @@ func (c *Client) BridgeCommand(ctx context.Context, command string, args map[str
 	return res.Data, nil
 }
 
+// BridgeState fetches the live telemetry the dwbridge mod publishes
+// (player roster with positions, world clock). Available=false is a normal
+// answer on a modless or stopped server, not an error.
+func (c *Client) BridgeState(ctx context.Context) (*wkagent.BridgeState, error) {
+	var out wkagent.BridgeState
+	if err := c.do(ctx, http.MethodGet, "/v1/bridge/state", nil, &out, 10*time.Second); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // InstallBridgeKit asks the agent to lay its baked-in UE4SS+dwbridge kit
 // next to the server exe (Wine image only; the plain image answers 501).
 // RestartRequired is true when the game was running, since the mod only

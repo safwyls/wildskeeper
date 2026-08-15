@@ -12,6 +12,15 @@ import { WkNote, WkPanel } from "../../components/wildskeeper/WkPanel";
 const KICK_REASON = "Kicking needs the dwbridge mod — no native console exists";
 const BAN_REASON = "Bans are managed in-game via Server Management";
 
+/** A player's position, when the dwbridge telemetry supplied one. The
+ * origin doubles as "no data": no legitimate player stands at exact 0,0
+ * (open water in this world), and the log-only roster reports zeros. UE
+ * units are centimetres — metres read better at a glance. */
+function formatPosition(p: Player): string | null {
+  if (!p.location_x && !p.location_y) return null;
+  return `${Math.round(p.location_x / 100).toLocaleString()}, ${Math.round(p.location_y / 100).toLocaleString()} m`;
+}
+
 /** The adventurer table rows, shared by the overview panel and this page. */
 export function WkPlayerRows({
   players,
@@ -43,6 +52,11 @@ export function WkPlayerRows({
             <td className="border-t border-wk-edge px-2.5 py-2.5">
               <span className="mr-2 inline-block h-[7px] w-[7px] rounded-full bg-wk-ok shadow-[0_0_5px_rgba(127,196,106,.6)]" />
               <span className="font-bold text-wk-parchment">{p.name}</span>
+              {formatPosition(p) && (
+                <span className="ml-2 font-mono text-xs text-wk-mist" title="Live position (dwbridge)">
+                  {formatPosition(p)}
+                </span>
+              )}
             </td>
             <td className="border-t border-wk-edge px-2.5 py-2.5 text-right">
               <button
@@ -95,7 +109,7 @@ export function WkAdventurers() {
       <div className="mx-auto max-w-[1180px] space-y-3.5 p-4 lg:p-7">
         <WkPanel
           title="Adventurers"
-          meta="derived from the server log · names only until the log carries ids"
+          meta="from the server log · live positions when the dwbridge mod is running"
           bodyClassName="pt-1.5"
         >
           <WkPlayerRows

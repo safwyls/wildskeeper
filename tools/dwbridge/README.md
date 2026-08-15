@@ -25,6 +25,7 @@ single-flight (the agent serializes commands), so the files have fixed names:
 | file            | writer | meaning                                             |
 |-----------------|--------|-----------------------------------------------------|
 | `heartbeat.json`| mod    | every ~2 s: liveness + the commands this build has  |
+| `state.json`    | mod    | every ~2 s: live telemetry — player roster with pawn positions, and the in-game clock once its property names are confirmed. Same freshness rule as the heartbeat; read via the agent's `GET /v1/bridge/state`. |
 | `request.json`  | agent  | `{"id","command","args"}`                            |
 | `response.json` | mod    | `{"id","ok","error","data"}`, echoing the id         |
 
