@@ -50,3 +50,7 @@ collisions with palcon on the same host). Roadmap: `docs/roadmap.md`.
 
 Tests: `go test ./...` and `cd web && npm test`. Production build:
 `cd web && npm run build` then `go build ./cmd/wildskeeper` (embeds the bundle).
+
+Workflow: when a branch is pushed and ready for review, open the PR
+without asking — the maintainer has standing-approved PR creation
+("always open the pr when appropriate", 2026-08-15).
