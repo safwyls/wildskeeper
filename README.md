@@ -1,3 +1,14 @@
+> **This repository is retired.** Wildskeeper lives in the
+> [sampo monorepo](https://github.com/safwyls/sampo) now — `core/` (the
+> shared console framework), `games/dragonwilds/`, `cmd/wildskeeper`,
+> `cmd/wkagent`, `web/wildskeeper`, and `tools/` (dwbridge, the UE4SS
+> kit, the wine shim). The port was verified against the live
+> Dragonwilds server on 2026-08-16, and the `ghcr.io/safwyls/wildskeeper`
+> / `ghcr.io/safwyls/wkagent` images (including `:latest` and
+> `:latest-wine`) publish from sampo since then. History is preserved in
+> sampo via subtree import. This repo is archived read-only; file issues
+> and PRs against sampo.
+
 # Wildskeeper (wildskeeper)
 
 A management console for a self-hosted **RuneScape: Dragonwilds** dedicated
